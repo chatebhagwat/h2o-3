@@ -410,7 +410,6 @@ public class ArrayUtils {
     for (int i=0; i<nums.length; i++) nums[i] *= nums2[i];
     return nums;
   }
-
   public static double[] invert(double[] ary) {
     if(ary == null) return null;
     for(int i=0;i<ary.length;i++) ary[i] = 1. / ary[i];
@@ -870,6 +869,12 @@ public class ArrayUtils {
   }
   public static long maxValue(long[] from) {
     long result = from[0];
+    for (int i = 1; i<from.length; ++i)
+      if (from[i]>result) result = from[i];
+    return result;
+  }
+  public static int maxValue(Integer[] from) {
+    int result = from[0];
     for (int i = 1; i<from.length; ++i)
       if (from[i]>result) result = from[i];
     return result;
