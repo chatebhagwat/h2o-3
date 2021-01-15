@@ -2,9 +2,13 @@ package hex.gam;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import water.DKV;
+import water.Scope;
 import water.TestUtil;
+import water.fvec.Frame;
 import water.runner.CloudSize;
 import water.runner.H2ORunner;
+import water.util.ArrayUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -18,7 +22,65 @@ import static water.util.ArrayUtils.sum;
 @RunWith(H2ORunner.class)
 @CloudSize(1)
 public class GamThinPlateRegressionBasicTest extends TestUtil {
-  
+  @Test
+  public void testKnotsDefault() {
+    Scope.enter();
+    try {
+      Frame train = Scope.track(parse_test_file("smalldata/glm_test/multinomial_10_classes_10_cols_10000_Rows_train.csv"));
+      String[] ignoredCols = new String[]{"C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"};
+      String[][] gamCols = new String[][]{{"C6"},{"C7", "C8"}, {"C9"}};
+      GAMModel.GAMParameters params = new GAMModel.GAMParameters();
+      params._response_column = "C11";
+      params._ignored_columns = ignoredCols;
+      params._num_knots = new int[]{0,10,0};
+      params._gam_columns = gamCols;
+      params._train = train._key;
+      GAMModel gam = new GAM(params).trainModel().get();
+    } finally {
+      Scope.exit();
+    }
+  }
+  @Test
+  public void testKnotsGenerationFromFrame() {
+    Scope.enter();
+    try {
+      Frame knotsFrame1 = generate_real_only(1, 5, 0);
+      final double[][] knots = new double[][]{{-1.9990569949269443}, {-0.9814307533427584}, {0.025991586992542004},
+              {1.0077098743127828}, {1.999422899675758}};
+      new ArrayUtils.CopyArrayToFrame(0,0,knots.length, knots).doAll(knotsFrame1);
+      DKV.put(knotsFrame1);
+      Scope.track(knotsFrame1);
+      
+      Frame knotsFrame2 = generate_real_only(2, 6, 0);
+      final double[][] knots2 = new double[][]{{-1.99, -19.8}, {-0.98, -0.97}, {0.03, 0.031}, {0.05, 0.06},
+              {1.01, 1.00}, {1.99, 1.98}};
+      new ArrayUtils.CopyArrayToFrame(0,1,knots2.length, knots2).doAll(knotsFrame2);
+      DKV.put(knotsFrame2);
+      Scope.track(knotsFrame2);
+
+      Frame knotsFrame3 = generate_real_only(1, 7, 0);
+      final double[][] knots3 = new double[][]{{-1.9990569949269443}, {-0.9814307533427584}, {0.025991586992542004},
+              {0.03}, {0.06}, {1.0077098743127828}, {1.999422899675758}};
+      new ArrayUtils.CopyArrayToFrame(0,0,knots3.length, knots3).doAll(knotsFrame3);
+      DKV.put(knotsFrame3);
+      Scope.track(knotsFrame3);
+
+      Frame train = Scope.track(parse_test_file("smalldata/glm_test/multinomial_10_classes_10_cols_10000_Rows_train.csv"));
+      String[] ignoredCols = new String[]{"C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"};
+      String[][] gamCols = new String[][]{{"C6"},{"C7", "C8"}, {"C9"}};
+      GAMModel.GAMParameters params = new GAMModel.GAMParameters();
+      params._knot_ids = new String[]{knotsFrame1._key.toString(), knotsFrame2._key.toString(), knotsFrame3._key.toString()};
+      params._bs = new int[]{0,1,1};
+      params._response_column = "C11";
+      params._ignored_columns = ignoredCols;
+      params._gam_columns = gamCols;
+      params._train = train._key;
+      GAMModel gam = new GAM(params).trainModel().get();
+      Scope.track_generic(gam);
+    } finally {
+      Scope.exit();
+    }
+  }
   // For a given d, calculate m, then calculate the polynomial basis degree for each predictor involves.
   // However, the 0th order is not included at this stage.
   @Test

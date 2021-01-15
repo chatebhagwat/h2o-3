@@ -51,7 +51,7 @@ public class GamCVTest extends TestUtil {
       params._family = GLMModel.GLMParameters.Family.binomial;
       params._response_column = "C21";
       params._max_iterations = 3;
-      params._gam_columns = new String[]{"C11"};
+      params._gam_columns = new String[][]{{"C11"}};
       params._train = train._key;
       params._solver = GLMModel.GLMParameters.Solver.IRLSM;
       params._fold_assignment = Model.Parameters.FoldAssignmentScheme.Random;
@@ -102,7 +102,7 @@ public class GamCVTest extends TestUtil {
       params._family = GLMModel.GLMParameters.Family.multinomial;
       params._response_column = "species";
       params._max_iterations = 3;
-      params._gam_columns = new String[]{"petal_wid"};
+      params._gam_columns = new String[][]{{"petal_wid"}};
       params._train = train._key;
       params._solver = GLMModel.GLMParameters.Solver.IRLSM;
       params._fold_assignment = Model.Parameters.FoldAssignmentScheme.Random;
@@ -153,7 +153,7 @@ public class GamCVTest extends TestUtil {
       params._family = GLMModel.GLMParameters.Family.gaussian;
       params._response_column = "sepal_len";
       params._max_iterations = 3;
-      params._gam_columns = new String[]{"petal_wid"};
+      params._gam_columns = new String[][]{{"petal_wid"}};
       params._train = train._key;
       params._solver = GLMModel.GLMParameters.Solver.IRLSM;
       params._fold_assignment = Model.Parameters.FoldAssignmentScheme.Random;

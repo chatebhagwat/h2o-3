@@ -831,6 +831,16 @@ public class ArrayUtils {
       if (from[i]<from[result]) result = i;
     return result;
   }
+  
+  public static int totalArrayDimension(String[][] arr) {
+    int dim = 0;
+    for (int outInd = 0; outInd < arr.length; outInd++) {
+      for (int innerInd = 0; innerInd < arr[outInd].length; innerInd++)
+        dim++;
+    }
+    return dim;
+  }
+  
   public static double maxValue(double[] ary) {
     return maxValue(ary,0,ary.length);
   }
@@ -1083,6 +1093,25 @@ public class ArrayUtils {
       vseed[i] = random.nextGaussian();
     }
     return vseed;
+  }
+
+  /** Remove the array allocation in this one */
+  public static long[] longRandomVector(long seed, int vectorSize, long maxVal) {
+    Random random = getRNG(seed);
+    Set<Long> randomLong = new HashSet<>();
+    while (randomLong.size() < vectorSize) {
+      long randVal = random.nextLong() % maxVal;
+      if (randVal < 0)
+        randVal = randVal+maxVal;
+      randomLong.add(randVal);
+    }
+    long[] randomLongArr = new long[vectorSize];
+    Iterator<Long> setIter = randomLong.iterator();
+    int count = 0;
+    while (setIter.hasNext())
+      randomLongArr[count++] = setIter.next();
+    
+    return randomLongArr;
   }
 
   /** Returns number of strings which represents a number. */

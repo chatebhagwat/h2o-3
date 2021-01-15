@@ -31,10 +31,12 @@ import static hex.genmodel.utils.ArrayUtils.flat;
 import static hex.glm.GLMModel.GLMParameters.Family.multinomial;
 import static hex.glm.GLMModel.GLMParameters.Family.ordinal;
 import static hex.glm.GLMModel.GLMParameters.GLMType.gam;
+import static water.util.ArrayUtils.longRandomVector;
+import static water.util.ArrayUtils.totalArrayDimension;
 
 
 public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel.GAMModelOutput> {
-  private double[][] _knots; // Knots for splines
+  private double[][][] _knots; // Knots for splines
   private double[] _cv_alpha = null;  // best alpha value found from cross-validation
   private double[] _cv_lambda = null; // bset lambda value found from cross-validation
   
@@ -105,30 +107,67 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
   }
     /***
      * This method will look at the keys of knots stored in _parms._knot_ids and copy them over to double[][]
-     * array.
+     * array.  Note that we have smoothers that take different number of columns and we will keep the order of 
+     * the knots as specified by the user in _parm._gam_columns.
      *
      * @return double[][] array containing the knots specified by users
      */
-  public double[][] generateKnotsFromKeys() {
-    int numGamCols = _parms._gam_columns.length;
-    double[][] knots = new double[numGamCols][];
-    boolean allNull = _parms._knot_ids ==null;
+  public double[][][] generateKnotsFromKeys() { // todo: parallize this operation
+    int numGamCols = totalArrayDimension(_parms._gam_columns); // total number of predictors in all smoothers
+    double[][][] knots = new double[numGamCols][][]; // 1st index into gam column, 2nd index number of knots for the row
+    boolean allNull = _parms._knot_ids == null;
+    int knotIndex = 0;
+    for (int outIndex = 0; outIndex < _parms._gam_columns.length; outIndex++) {
+      String tempKey = allNull ? null : _parms._knot_ids[outIndex]; // one knot_id for each smoother
+      knots[outIndex] = new double[_parms._gam_columns[outIndex].length][];
+      if (tempKey != null && (tempKey.length() > 0)) {  // read knots location from Frame given by user      
+        final Frame knotFrame = Scope.track((Frame) DKV.getGet(Key.make(tempKey)));
+        double[][] knotContent = new double[(int) knotFrame.numRows()][_parms._gam_columns[outIndex].length];
+        final ArrayUtils.FrameToArray f2a = new ArrayUtils.FrameToArray(0,
+                _parms._gam_columns[outIndex].length-1, knotFrame.numRows(), knotContent);
+        knotContent = f2a.doAll(knotFrame).getArray();  // first index is row, second index is column
+       
+        final double[][] knotCTranspose = ArrayUtils.transpose(knotContent);// change knots to correct order
+        for (int innerIndex = 0; innerIndex < knotCTranspose.length; innerIndex++) {
+          knots[outIndex][innerIndex] = new double[knotContent.length];
+          System.arraycopy(knotCTranspose[innerIndex], 0, knots[outIndex][innerIndex], 0, 
+                  knots[outIndex][innerIndex].length);
+          if (knotCTranspose.length == 1 && _parms._bs[outIndex] == 0) // only check for order to single smoothers
+            failVerifyKnots(knots[outIndex][innerIndex], outIndex);
+          knotIndex++;
+        }
+        _parms._num_knots[outIndex] = knotContent.length;
 
-    for (int index=0; index < numGamCols; index++) {
-      final Frame predictVec = new Frame(new String[]{_parms._gam_columns[index]}, new Vec[]{_parms.train().vec(_parms._gam_columns[index])});
-      String tempKey = allNull?null:_parms._knot_ids[index];
-      if (tempKey != null && (tempKey.length() > 0)) {  // read knots location from Frame given by user
-        final Frame knotFrame = Scope.track((Frame)DKV.getGet(Key.make(tempKey)));
-        double[][] knotContent = new double[(int)knotFrame.numRows()][1];
-        final ArrayUtils.FrameToArray f2a = new ArrayUtils.FrameToArray(0,0, knotFrame.numRows(), knotContent);
-        knotContent = f2a.doAll(knotFrame).getArray();
-        knots[index] = new double[knotContent.length];
-        final double[][] knotCTranspose = ArrayUtils.transpose(knotContent);
-        System.arraycopy(knotCTranspose[0],0,knots[index], 0, knots[index].length);
-        failVerifyKnots(knots[index], index);
-      } else {  // current column knotkey is null
-        knots[index] = generateKnotsOneColumn(predictVec, _parms._num_knots[index]);
-        failVerifyKnots(knots[index], index);
+      } else {  // current column knotkey is null, we will use default method to generate knots
+        final Frame predictVec = new Frame(_parms._gam_columns[outIndex],
+                _parms.train().vecs(_parms._gam_columns[outIndex]));
+        if (_parms._gam_columns[outIndex].length == 1) {
+          knots[outIndex][0] = generateKnotsOneColumn(predictVec, _parms._num_knots[outIndex]);
+          failVerifyKnots(knots[outIndex][0], outIndex);
+          knotIndex++;
+        } else {  // generate knots for multi-predictor smooths, randomly choose rows in parms._num_knots
+          long[] randomRowVec = longRandomVector(_parms._seed, 
+                  _parms._num_knots[outIndex]+(int)predictVec.naCount(), predictVec.numRows());
+          int rowCount = 0;
+          knots[outIndex] = new double[_parms._gam_columns[outIndex].length][_parms._num_knots[outIndex]];
+          
+          boolean foundNAinRow = false;
+          for (int rowInd = 0; rowInd < randomRowVec.length; rowInd++) {
+            if (rowCount >= _parms._num_knots[outIndex])
+              break;
+            for (int colInd = 0; colInd < _parms._gam_columns[outIndex].length; colInd++) {
+              foundNAinRow = false;
+              if (Double.isNaN((predictVec.vec(_parms._gam_columns[outIndex][colInd]).at(randomRowVec[rowInd])))) {
+                foundNAinRow = true;
+                break;  // check for na
+              }
+              knots[outIndex][colInd][rowCount] = predictVec.vec(_parms._gam_columns[outIndex][colInd]).at(randomRowVec[rowInd]);
+            }
+            if (!foundNAinRow)
+              rowCount++;
+          }
+          knotIndex += _parms._gam_columns[outIndex].length;
+        }
       }
     }
     return knots;
@@ -142,12 +181,12 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       if (Double.isNaN(knots[index])) {
         error("gam_columns/knots_id", String.format("Knots generated by default or specified in knots_id " +
                         "ended up containing a NaN value for gam_column %s.   Please specify alternate knots_id" +
-                        " or choose other columns.", _parms._gam_columns[gam_column_index]));
+                        " or choose other columns.", _parms._gam_columns[gam_column_index][0]));
         return;
       }
       if (index > 0 && knots[index - 1] > knots[index]) {
         error("knots_id", String.format("knots not sorted in ascending order for gam_column %s. " +
-                        "Knots at index %d: %f.  Knots at index %d: %f",_parms._gam_columns[gam_column_index], index-1, 
+                        "Knots at index %d: %f.  Knots at index %d: %f",_parms._gam_columns[gam_column_index][0], index-1, 
                 knots[index-1], index, knots[index]));
         return;
       }
@@ -156,7 +195,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
                         "generate well-defined knots. Please choose other columns or reduce " +
                         "the number of knots.  If knots are specified in knots_id, choose alternate knots_id as the" +
                         " knots are not in ascending order.  Knots at index %d: %f.  Knots at index %d: %f", 
-                _parms._gam_columns[gam_column_index], index-1, knots[index-1], index, knots[index]));
+                _parms._gam_columns[gam_column_index][0], index-1, knots[index-1], index, knots[index]));
         return;
       }
     }
@@ -212,57 +251,25 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     }
     if (error_count() > 0)
       throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(GAM.this);
-
     if (_parms._gam_columns == null)  // check _gam_columns contains valid columns
       error("_gam_columns", "must specify columns names to apply GAM to.  If you don't have any," +
               " use GLM.");
-    else {  // check and make sure gam_columns column types are legal
-      Frame dataset = _parms.train();
-      List<String> cNames = Arrays.asList(dataset.names());
-      for (int index = 0; index < _parms._gam_columns.length; index++) {
-        String cname = _parms._gam_columns[index];
-        if (!cNames.contains(cname))
-          error("gam_columns", "column name: " + cname + " does not exist in your dataset.");
-        if (dataset.vec(cname).isCategorical())
-          error("gam_columns", "column " + cname + " is categorical and cannot be used as a gam " +
-                  "column.");
-        if (dataset.vec(cname).isBad() || dataset.vec(cname).isTime() || dataset.vec(cname).isUUID() ||
-                dataset.vec(cname).isConst())
-          error("gam_columns", String.format("Column '%s' of type '%s' cannot be used as GAM column. Column types " +
-                  "BAD, TIME, CONSTANT and UUID cannot be used.", cname, dataset.vec(cname).get_type_str()));
-        if (!dataset.vec(cname).isNumeric())
-          error("gam_columns", "column " + cname + " is not numerical and cannot be used as a gam" +
-                  " column.");
-      }
+    else  // check and make sure gam_columns column types are legal
+      assertLegalGamColumnsNBSTypes();
+    if (_parms._bs == null) {
+      setDefaultBSType();
     }
     if ((_parms._bs != null) && (_parms._gam_columns.length != _parms._bs.length))  // check length
-      error("gam colum number", "Number of gam columns implied from _bs and _gam_columns do not match.");
-    if (_parms._bs == null) // default to bs type 0
-      _parms._bs = new int[_parms._gam_columns.length];
-    if (_parms._num_knots == null) {  // user did not specify any knot numbers, we will use default 10
-      _parms._num_knots = new int[_parms._gam_columns.length];  // different columns may have different
-      for (int index = 0; index < _parms._gam_columns.length; index++) {  // for zero value _num_knots, set to valid number
-        if (_parms._num_knots[index] == 0) {
-          long numRowMinusNACnt = _train.numRows() - _parms.train().vec(_parms._gam_columns[index]).naCnt();
-          _parms._num_knots[index] = numRowMinusNACnt < 10 ? (int) numRowMinusNACnt : 10;
-        }
-      }
-    }
-    int cindex = 0;
-    for (int numKnots : _parms._num_knots) {  // check to make sure numKnot is valid
-      long eligibleRows = _train.numRows() - _parms.train().vec(_parms._gam_columns[cindex]).naCnt();
-      if (numKnots > eligibleRows) {
-        error("_num_knots", " number of knots specified in _num_knots: " + _parms._num_knots[cindex] + " exceed number " +
-                "of rows in training frame minus NA rows: " + eligibleRows + ".  Reduce _num_knots.");
-      }
-      cindex++;
-    }
+      error("gam colum number", "Number of gam columns implied from _bs and _gam_columns do not " +
+              "match.");
+    checkOrChooseNumKnots(); // check valid num_knot assignment or choose num_knots
     if ((_parms._num_knots != null) && (_parms._num_knots.length != _parms._gam_columns.length))
-      error("gam colum number", "Number of gam columns implied from _num_knots and _gam_columns do not match.");
+      error("gam colum number", "Number of gam columns implied from _num_knots and _gam_columns do" +
+              " not match.");
     if (_parms._knot_ids != null) { // check knots location specification
       if (_parms._knot_ids.length != _parms._gam_columns.length)
-        error("gam colum number", "Number of gam columns implied from _num_knots and _knot_ids do not" +
-                " match.");
+        error("gam colum number", "Number of gam columns implied from _num_knots and _knot_ids do" +
+                " not match.");
     }
     _knots = generateKnotsFromKeys(); // generate knots and verify that they are given correctly
     if (_parms._saveZMatrix && ((_train.numCols() - 1 + _parms._num_knots.length) < 2))
@@ -291,6 +298,70 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
             && response().get_type() != Vec.T_CAT) {
       error("_response_column", String.format("For given response family '%s', please provide a categorical" +
               " response column. Current response column type is '%s'.", _parms._family, response().get_type_str()));
+    }
+  }
+  
+  public void setDefaultBSType() {
+    _parms._bs = new int[_parms._gam_columns.length];
+    for (int index = 0; index < _parms._bs.length; index++) {
+      if (_parms._gam_columns[index].length > 1)
+        _parms._bs[index] = 0;
+      else
+        _parms._bs[index] = 1;
+    }
+  }
+  
+  // set default num_knots to 10 for gam_columns where there is no knot_id specified
+  public void checkOrChooseNumKnots() {
+    if (_parms._num_knots == null)
+      _parms._num_knots = new int[_parms._gam_columns.length];  // different columns may have different
+    for (int index = 0; index < _parms._num_knots.length; index++) {  // set zero value _num_knots
+      if (_parms._knot_ids == null || (_parms._knot_ids != null && _parms._knot_ids[index] == null)) {  // knots are not specified
+        int numKnots = _parms._num_knots[index];
+        int naSum = 0;
+        for (int innerIndex = 0; innerIndex < _parms._gam_columns[index].length; innerIndex++) {
+          naSum += _parms.train().vec(_parms._gam_columns[index][innerIndex]).naCnt();
+        }
+        long eligibleRows = _train.numRows()-naSum;
+        if (_parms._num_knots[index] == 0) {
+          _parms._num_knots[index] = eligibleRows < 10 ? (int) eligibleRows : 10;
+        } else {  // num_knots assigned by user and check to make sure it is legal
+          if (numKnots > eligibleRows) {
+            error("_num_knots", " number of knots specified in _num_knots: "+numKnots+" for smoother" +
+                    " with first predictor "+_parms._gam_columns[index][0]+".  Reduce _num_knots.");
+          }
+        }
+      }
+    }
+  }
+  
+  public void assertLegalGamColumnsNBSTypes() {
+    Frame dataset = _parms.train();
+    List<String> cNames = Arrays.asList(dataset.names());
+    for (int index = 0; index < _parms._gam_columns.length; index++) {
+      if (_parms._bs != null) { // check and make sure the correct bs type is chosen
+        if (_parms._gam_columns[index].length == 1 && _parms._bs[index] != 0) 
+          error("bs", "column name" + _parms._gam_columns[index][0]+" is the single predictor of" +
+                  " a smoother and can only use bs = 0");
+        else if (_parms._gam_columns[index].length > 1 && _parms._bs[index] != 1)
+          error("bs", "Smother with multiple predictors can only use bs = 1");        
+      }
+        
+      for (int innerIndex = 0; innerIndex < _parms._gam_columns[index].length; innerIndex++) {
+        String cname = _parms._gam_columns[index][innerIndex];
+        if (!cNames.contains(cname))
+          error("gam_columns", "column name: " + cname + " does not exist in your dataset.");
+        if (dataset.vec(cname).isCategorical())
+          error("gam_columns", "column " + cname + " is categorical and cannot be used as a gam " +
+                  "column.");
+        if (dataset.vec(cname).isBad() || dataset.vec(cname).isTime() || dataset.vec(cname).isUUID() ||
+                dataset.vec(cname).isConst())
+          error("gam_columns", String.format("Column '%s' of type '%s' cannot be used as GAM column. Column types " +
+                  "BAD, TIME, CONSTANT and UUID cannot be used.", cname, dataset.vec(cname).get_type_str()));
+        if (!dataset.vec(cname).isNumeric())
+          error("gam_columns", "column " + cname + " is not numerical and cannot be used as a gam" +
+                  " column.");
+      }
     }
   }
 
@@ -364,13 +435,13 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     }
 
     void addGAM2Train() {
-      int numGamFrame = _parms._gam_columns.length;
+      int numGamFrame = _parms._gam_columns.length; // number of smoothers to generate
       RecursiveAction[] generateGamColumn = new RecursiveAction[numGamFrame];
       for (int index = 0; index < numGamFrame; index++) {
         final Vec weights_column = (_parms._weights_column == null) ? Vec.makeOne(_parms.train().numRows()) 
                 : _parms.train().vec(_parms._weights_column);
         final Frame predictVec = new Frame();
-        predictVec.add(_parms._gam_columns[index], _parms._train.get().vec(_parms._gam_columns[index]));
+        predictVec.add(_parms._gam_columns[0] [index], _parms._train.get().vec(_parms._gam_columns[0][index]));
         predictVec.add("weights_column", weights_column);
         
         final int numKnots = _parms._num_knots[index];  // grab number of knots to generate

@@ -261,8 +261,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     // the following parameters are for GAM
     public int[] _num_knots; // array storing number of knots per basis function
     public String[] _knot_ids;  // store frame keys that contain knots location for each gam column in gam_X;
-    public String[] _gam_columns; // array storing which predictor columns are needed
-    public int[] _bs; // choose spline function for gam column, 0 = cr
+    public String[][] _gam_columns; // array storing which predictor columns are needed
+    public int[] _bs; // choose spline function for gam column, 0 = cr, 1 = thin plate regression with knots, 2 = thin plate regression with SVD
     public double[] _scale;  // array storing scaling values to control wriggliness of fit
     public boolean _saveZMatrix = false;  // if asserted will save Z matrix
     public boolean _keep_gam_cols = false;  // if true will save the keys to gam Columns only
@@ -489,8 +489,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     String[] testNames = adptedF.names();
     Vec[] gamCols = new Vec[numGamCols];
     for (int vind=0; vind<numGamCols; vind++)
-      gamCols[vind] = adptedF.vec(parms._gam_columns[vind]).clone();
-    Frame onlyGamCols = new Frame(parms._gam_columns, gamCols);
+      gamCols[vind] = adptedF.vec(parms._gam_columns[0][vind]).clone();// todo: fix for thin plate
+    Frame onlyGamCols = new Frame(parms._gam_columns[0], gamCols);
     AddGamColumns genGamCols = new AddGamColumns(binvD, zTranspose, knots, numKnots, onlyGamCols);
     genGamCols.doAll(genGamCols._gamCols2Add, Vec.T_NUM, onlyGamCols);
     String[] gamColsNames = new String[genGamCols._gamCols2Add];
