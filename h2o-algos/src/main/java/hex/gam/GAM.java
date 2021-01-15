@@ -3,7 +3,6 @@ package hex.gam;
 import hex.*;
 import hex.gam.GAMModel.GAMParameters;
 import hex.gam.MatrixFrameUtils.GamUtils;
-import hex.gam.MatrixFrameUtils.GenerateGamMatrixOneColumn;
 import hex.glm.GLM;
 import hex.glm.GLMModel;
 import hex.glm.GLMModel.GLMParameters;
@@ -442,12 +441,11 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
                 : _parms.train().vec(_parms._weights_column);
         final Frame predictVec = new Frame();
         predictVec.add(_parms._gam_columns[0] [index], _parms._train.get().vec(_parms._gam_columns[0][index]));
-        predictVec.add("weights_column", weights_column);
-        
+        predictVec.add("weights_column", weights_column); // add weight columns to the end
+        final int frameIndex = index;        
         final int numKnots = _parms._num_knots[index];  // grab number of knots to generate
         final int numKnotsM1 = numKnots - 1;
         final int splineType = _parms._bs[index];
-        final int frameIndex = index;
         final String[] newColNames = new String[numKnots];
         for (int colIndex = 0; colIndex < numKnots; colIndex++) {
           newColNames[colIndex] = _parms._gam_columns[index] + "_" + splineType + "_" + colIndex;
@@ -456,32 +454,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         _gamColNamesCenter[frameIndex] = new String[numKnotsM1];
         _gamColMeans[frameIndex] = new double[numKnots];
         System.arraycopy(newColNames, 0, _gamColNames[frameIndex], 0, numKnots);
-        generateGamColumn[frameIndex] = new RecursiveAction() {
-          @Override
-          protected void compute() {
-            GenerateGamMatrixOneColumn genOneGamCol = new GenerateGamMatrixOneColumn(splineType, numKnots, 
-                    _knots[frameIndex], predictVec).doAll(numKnots, Vec .T_NUM,predictVec);
-            if (_parms._savePenaltyMat)  // only save this for debugging
-              GamUtils.copy2DArray(genOneGamCol._penaltyMat, _penalty_mat[frameIndex]); // copy penalty matrix
-              // calculate z transpose
-              Frame oneAugmentedColumnCenter = genOneGamCol.outputFrame(Key.make(), newColNames,
-                      null);
-              for (int cind=0; cind < numKnots; cind++) 
-                _gamColMeans[frameIndex][cind] = oneAugmentedColumnCenter.vec(cind).mean();
-              oneAugmentedColumnCenter = genOneGamCol.centralizeFrame(oneAugmentedColumnCenter,
-                      predictVec.name(0) + "_" + splineType + "_center_", _parms);
-              GamUtils.copy2DArray(genOneGamCol._ZTransp, _zTranspose[frameIndex]); // copy transpose(Z)
-              double[][] transformedPenalty = ArrayUtils.multArrArr(ArrayUtils.multArrArr(genOneGamCol._ZTransp,
-                      genOneGamCol._penaltyMat), ArrayUtils.transpose(genOneGamCol._ZTransp));  // transform penalty as zt*S*z
-              GamUtils.copy2DArray(transformedPenalty, _penalty_mat_center[frameIndex]);
-              _gamFrameKeysCenter[frameIndex] = oneAugmentedColumnCenter._key;
-              DKV.put(oneAugmentedColumnCenter);
-              System.arraycopy(oneAugmentedColumnCenter.names(), 0, _gamColNamesCenter[frameIndex], 0,
-                      numKnotsM1);
-            GamUtils.copy2DArray(genOneGamCol._bInvD, _binvD[frameIndex]);
-            _numKnots[frameIndex] = genOneGamCol._numKnots;
-          }
-        };
+        generateGamColumn[index] = new GenCubicSplineSmoother();
       }
       ForkJoinTask.invokeAll(generateGamColumn);
     }

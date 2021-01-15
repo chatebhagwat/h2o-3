@@ -76,7 +76,7 @@ public class GAMMojoWriter extends ModelMojoWriter<GAMModel, GAMModel.GAMParamet
       writekv("beta center length per class", model._output._model_beta.length);
     }
     writekv("bs", model._parms._bs);  // an array of choice of spline functions
-    writeDoubleArray(model._output._knots, "knots");
+    writeDoubleArray(model._output._knots[0], "knots"); // todo fix me
     int countGamCols = 0;
     for (String gamCol : model._parms._gam_columns[0]) {// todo fix
       writeDoubleArray(model._output._zTranspose[countGamCols], gamCol+"_zTranspose");      // write zTranspose

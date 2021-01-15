@@ -394,7 +394,7 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     public double[][][] _penaltyMatrices_center; // stores t(Z)*t(D)*Binv*D*Z and can be null
     public double[][][] _penaltyMatrices;          // store t(D)*Binv*D and can be null
     public double[][][] _binvD; // store BinvD for each gam column specified for scoring
-    public double[][] _knots; // store knots location for each gam column
+    public double[][][] _knots; // store knots location for each gam column
     public int[] _numKnots;  // store number of knots per gam column
     public Key<Frame> _gamTransformedTrainCenter;  // contain key of predictors, all gam columns centered
     public DataInfo _dinfo;
@@ -480,18 +480,18 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
   public Frame cleanUpInputFrame(Frame test) {
     Frame adptedF = new Frame(Key.make(), test.names(), test.vecs().clone()); // clone test dataset
     return cleanUpInputFrame(adptedF, _parms, _gamColNames, _output._binvD, _output._zTranspose, 
-            _output._knots, _output._numKnots);
+            _output._knots, _output._numKnots);// fix me
   }
 
   public static Frame cleanUpInputFrame(Frame adptedF, GAMParameters parms, String[][] gamColNames, 
-                                 double[][][] binvD, double[][][] zTranspose, double[][] knots, int[] numKnots) {
+                                 double[][][] binvD, double[][][] zTranspose, double[][][] knots, int[] numKnots) {
     int numGamCols = parms._gam_columns.length;
     String[] testNames = adptedF.names();
     Vec[] gamCols = new Vec[numGamCols];
     for (int vind=0; vind<numGamCols; vind++)
       gamCols[vind] = adptedF.vec(parms._gam_columns[0][vind]).clone();// todo: fix for thin plate
     Frame onlyGamCols = new Frame(parms._gam_columns[0], gamCols);
-    AddGamColumns genGamCols = new AddGamColumns(binvD, zTranspose, knots, numKnots, onlyGamCols);
+    AddGamColumns genGamCols = new AddGamColumns(binvD, zTranspose, knots[0], numKnots, onlyGamCols); // todo: fix me
     genGamCols.doAll(genGamCols._gamCols2Add, Vec.T_NUM, onlyGamCols);
     String[] gamColsNames = new String[genGamCols._gamCols2Add];
     int offset = 0;
