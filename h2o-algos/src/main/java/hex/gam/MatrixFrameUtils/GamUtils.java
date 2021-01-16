@@ -26,16 +26,23 @@ public class GamUtils {
     double[][][] array3D = new double[num2DArrays][][];
     for (int frameIdx = 0; frameIdx < num2DArrays; frameIdx++) {
       int numKnots = parms._num_knots[frameIdx];
+      array3D[frameIdx] = allocate2DArray(parms, fileMode, numKnots);
+    }
+    return array3D;
+  }
+
+  // allocate 3D array to store various information;
+  public static double[][] allocate2DArray(GAMParameters parms, AllocateType fileMode, int numKnots) {
+    double[][] array2D;
       switch (fileMode) {
-        case firstOneLess: array3D[frameIdx] = MemoryManager.malloc8d(numKnots-1, numKnots); break;
-        case sameOrig: array3D[frameIdx] = MemoryManager.malloc8d(numKnots, numKnots); break;
-        case bothOneLess: array3D[frameIdx] = MemoryManager.malloc8d(numKnots-1, numKnots-1); break;
-        case firstTwoLess: array3D[frameIdx] = MemoryManager.malloc8d(numKnots-2, numKnots); break;
+        case firstOneLess: array2D = MemoryManager.malloc8d(numKnots-1, numKnots); break;
+        case sameOrig: array2D = MemoryManager.malloc8d(numKnots, numKnots); break;
+        case bothOneLess: array2D = MemoryManager.malloc8d(numKnots-1, numKnots-1); break;
+        case firstTwoLess: array2D = MemoryManager.malloc8d(numKnots-2, numKnots); break;
         default: throw new IllegalArgumentException("fileMode can only be firstOneLess, sameOrig, bothOneLess or " +
                 "firstTwoLess.");
       }
-    }
-    return array3D;
+    return array2D;
   }
 
   public enum AllocateType {firstOneLess, sameOrig, bothOneLess, firstTwoLess} // special functions are performed depending on GLMType.  Internal use

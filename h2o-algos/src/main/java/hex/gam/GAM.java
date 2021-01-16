@@ -3,6 +3,7 @@ package hex.gam;
 import hex.*;
 import hex.gam.GAMModel.GAMParameters;
 import hex.gam.MatrixFrameUtils.GamUtils;
+import hex.gam.MatrixFrameUtils.GenerateGamMatrixOneColumn;
 import hex.glm.GLM;
 import hex.glm.GLMModel;
 import hex.glm.GLMModel.GLMParameters;
@@ -24,8 +25,8 @@ import java.util.List;
 
 import static hex.ModelMetrics.calcVarImp;
 import static hex.gam.GAMModel.cleanUpInputFrame;
-import static hex.gam.MatrixFrameUtils.GamUtils.AllocateType.*;
 import static hex.gam.MatrixFrameUtils.GamUtils.*;
+import static hex.gam.MatrixFrameUtils.GamUtils.AllocateType.*;
 import static hex.genmodel.utils.ArrayUtils.flat;
 import static hex.glm.GLMModel.GLMParameters.Family.multinomial;
 import static hex.glm.GLMModel.GLMParameters.Family.ordinal;
@@ -432,29 +433,97 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         _train.add(_parms._response_column, responseVec);
       return _train;
     }
+    
+    Frame prepareGamVec(int gam_column_index) {
+      final Vec weights_column = (_parms._weights_column == null) ? Vec.makeOne(_parms.train().numRows())
+              : _parms.train().vec(_parms._weights_column);
+      final Frame predictVec = new Frame();
+      int numPredictors = _parms._gam_columns[gam_column_index].length;
+      for (int colInd = 0; colInd < numPredictors; colInd++)
+        predictVec.add(_parms._gam_columns[gam_column_index][colInd], 
+                _parms._train.get().vec(_parms._gam_columns[gam_column_index][colInd]));
+      predictVec.add("weights_column", weights_column); // add weight columns for CV support
+      return predictVec;
+    }
+    
+    String[] generateGamColNames(int gam_col_index) {
+      String[] newColNames = new String[_parms._num_knots[gam_col_index]];
+      StringBuffer nameStub = new StringBuffer();
+      int numPredictors = _parms._gam_columns[gam_col_index].length;
+      for (int predInd = 0; predInd < numPredictors; predInd++) {
+        nameStub.append(_parms._gam_columns[gam_col_index][predInd]+"_");
+      }
+      String stubName = nameStub.toString();
+      for (int knotIndex = 0; knotIndex < _parms._num_knots[gam_col_index]; knotIndex++) {
+        newColNames[knotIndex] = stubName+knotIndex;
+      }
+      return newColNames;
+    }
+
+    public class CubicSplineSmoother extends RecursiveAction {
+      final Frame _predictVec;
+      final int _numKnots;
+      final int _numKnotsM1;
+      final int _splineType;
+      final boolean _savePenaltyMat;
+      final String[] _newColNames;
+      final double[] _knots;
+      final GAMParameters _parms;
+      final AllocateType _fileMode;
+      final int _gamColIndex;
+      
+      public CubicSplineSmoother(Frame predV, GAMParameters parms, int gamColIndex, String[] gamColNames, double[] knots,
+                                 AllocateType fileM) {
+        _predictVec = predV;
+        _numKnots = parms._num_knots[gamColIndex];
+        _numKnotsM1 = _numKnots-1;
+        _splineType = parms._bs[gamColIndex];
+        _savePenaltyMat = parms._savePenaltyMat;
+        _newColNames = gamColNames;
+        _knots = knots;
+        _parms = parms;
+        _gamColIndex = gamColIndex;
+        _fileMode = fileM;
+      }
+
+      @Override
+      protected void compute() {
+        GenerateGamMatrixOneColumn genOneGamCol = new GenerateGamMatrixOneColumn(_splineType, _numKnots,
+                _knots, _predictVec).doAll(_numKnots, Vec.T_NUM, _predictVec);
+        if (_savePenaltyMat)  // only save this for debugging
+          GamUtils.copy2DArray(genOneGamCol._penaltyMat, _penalty_mat[_gamColIndex]); // copy penalty matrix
+        Frame oneAugmentedColumnCenter = genOneGamCol.outputFrame(Key.make(), _newColNames,
+                null);
+        oneAugmentedColumnCenter = genOneGamCol.centralizeFrame(oneAugmentedColumnCenter,
+                _predictVec.name(0) + "_" + _splineType + "_center_", _parms);
+        GamUtils.copy2DArray(genOneGamCol._ZTransp, _zTranspose[_gamColIndex]); // copy transpose(Z)
+        double[][] transformedPenalty = ArrayUtils.multArrArr(ArrayUtils.multArrArr(genOneGamCol._ZTransp,
+                genOneGamCol._penaltyMat), ArrayUtils.transpose(genOneGamCol._ZTransp));  // transform penalty as zt*S*z
+        GamUtils.copy2DArray(transformedPenalty, _penalty_mat_center[_gamColIndex]);
+        _gamFrameKeysCenter[_gamColIndex] = oneAugmentedColumnCenter._key;
+        DKV.put(oneAugmentedColumnCenter);
+        System.arraycopy(oneAugmentedColumnCenter.names(), 0, _gamColNamesCenter[_gamColIndex], 0,
+                _numKnotsM1);
+        GamUtils.copy2DArray(genOneGamCol._bInvD, _binvD[_gamColIndex]);
+      }
+    }
 
     void addGAM2Train() {
       int numGamFrame = _parms._gam_columns.length; // number of smoothers to generate
       RecursiveAction[] generateGamColumn = new RecursiveAction[numGamFrame];
-      for (int index = 0; index < numGamFrame; index++) {
-        final Vec weights_column = (_parms._weights_column == null) ? Vec.makeOne(_parms.train().numRows()) 
-                : _parms.train().vec(_parms._weights_column);
-        final Frame predictVec = new Frame();
-        predictVec.add(_parms._gam_columns[0] [index], _parms._train.get().vec(_parms._gam_columns[0][index]));
-        predictVec.add("weights_column", weights_column); // add weight columns to the end
-        final int frameIndex = index;        
-        final int numKnots = _parms._num_knots[index];  // grab number of knots to generate
-        final int numKnotsM1 = numKnots - 1;
-        final int splineType = _parms._bs[index];
-        final String[] newColNames = new String[numKnots];
-        for (int colIndex = 0; colIndex < numKnots; colIndex++) {
-          newColNames[colIndex] = _parms._gam_columns[index] + "_" + splineType + "_" + colIndex;
+      for (int index = 0; index < numGamFrame; index++) { // generate smoothers/splines
+        final Frame predictVec = prepareGamVec(index);  // extract predictors from training frame
+        _gamColNames[index] = generateGamColNames(index);
+        int numKnots = _parms._num_knots[index];
+        int numKnotsM1 = numKnots - 1;
+        if (_parms._gam_columns[index].length == 1 && _parms._bs[index] == 0) {// single predictor smoothers
+          _gamColNamesCenter[index] = new String[numKnotsM1];
+          _gamColMeans[index] = new double[numKnots];
+          generateGamColumn[index] = new CubicSplineSmoother(predictVec, _parms, index, _gamColNames[index],
+                  _knots[index][0], firstTwoLess);
+        } else if (_parms._bs[index] == 1) { // 
+          generateGamColumn[index] = new ThinPlateRegressionSmootherWithKnots();
         }
-        _gamColNames[frameIndex] = new String[numKnots];
-        _gamColNamesCenter[frameIndex] = new String[numKnotsM1];
-        _gamColMeans[frameIndex] = new double[numKnots];
-        System.arraycopy(newColNames, 0, _gamColNames[frameIndex], 0, numKnots);
-        generateGamColumn[index] = new GenCubicSplineSmoother();
       }
       ForkJoinTask.invokeAll(generateGamColumn);
     }
