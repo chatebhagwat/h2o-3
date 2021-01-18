@@ -1,13 +1,14 @@
 package hex.gam.MatrixFrameUtils;
 
 import hex.Model;
-import hex.gam.GAMModel;
 import hex.gam.GAMModel.GAMParameters;
-import hex.glm.GLMModel;
 import hex.glm.GLMModel.GLMParameters;
+import hex.quantile.Quantile;
+import hex.quantile.QuantileModel;
 import water.DKV;
 import water.Key;
 import water.MemoryManager;
+import water.Scope;
 import water.fvec.Frame;
 import water.fvec.Vec;
 import water.util.ArrayUtils;
@@ -17,7 +18,8 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-import static water.util.ArrayUtils.find;
+import static hex.gam.GamSplines.ThinPlateRegressionUtils.calculateM;
+import static hex.gam.GamSplines.ThinPlateRegressionUtils.calculatem;
 
 public class GamUtils {
 
@@ -131,76 +133,107 @@ public class GamUtils {
     }
   }
 
-  public static void copyGLMCoeffs2GAMCoeffs(GAMModel model, GLMModel glm, GLMParameters.Family family,
-                                             int gamNumStart, int nclass) {
-    int numCoeffPerClass = model._output._coefficient_names_no_centering.length;
-    if (family.equals(GLMParameters.Family.multinomial) || family.equals(GLMParameters.Family.ordinal)) {
-      double[][] model_beta_multinomial = glm._output.get_global_beta_multinomial();
-      double[][] standardized_model_beta_multinomial = glm._output.getNormBetaMultinomial();
-      model._output._model_beta_multinomial_no_centering = new double[nclass][];
-      model._output._standardized_model_beta_multinomial_no_centering = new double[nclass][];
-      for (int classInd = 0; classInd < nclass; classInd++) {
-        model._output._model_beta_multinomial_no_centering[classInd] = convertCenterBeta2Beta(model._output._zTranspose,
-                gamNumStart, model_beta_multinomial[classInd], numCoeffPerClass);
-        model._output._standardized_model_beta_multinomial_no_centering[classInd] = convertCenterBeta2Beta(model._output._zTranspose,
-                gamNumStart, standardized_model_beta_multinomial[classInd], numCoeffPerClass);
-      }
-    } else {  // other families
-      model._output._model_beta_no_centering = convertCenterBeta2Beta(model._output._zTranspose, gamNumStart,
-              glm.beta(), numCoeffPerClass);
-      model._output._standardized_model_beta_no_centering = convertCenterBeta2Beta(model._output._zTranspose, gamNumStart,
-              glm._output.getNormBeta(), numCoeffPerClass);
-    }
-  }
-
-  // This method carries out the evaluation of beta = Z betaCenter as explained in documentation 7.2
-  public static double[] convertCenterBeta2Beta(double[][][] ztranspose, int gamNumStart, double[] centerBeta,
-                                                int betaSize) {
-    double[] originalBeta = new double[betaSize];
-    if (ztranspose!=null) { // centering is performed
-      int numGamCols = ztranspose.length;
-      int gamColStart = gamNumStart;
-      int origGamColStart = gamNumStart;
-      System.arraycopy(centerBeta,0, originalBeta, 0, gamColStart);   // copy everything before gamCols
-      for (int colInd=0; colInd < numGamCols; colInd++) {
-        double[] tempCbeta = new double[ztranspose[colInd].length];
-        System.arraycopy(centerBeta, gamColStart, tempCbeta, 0, tempCbeta.length);
-        double[] tempBeta = ArrayUtils.multVecArr(tempCbeta, ztranspose[colInd]);
-        System.arraycopy(tempBeta, 0, originalBeta, origGamColStart, tempBeta.length);
-        gamColStart += tempCbeta.length;
-        origGamColStart += tempBeta.length;
-      }
-      originalBeta[betaSize-1]=centerBeta[centerBeta.length-1];
-    } else
-      System.arraycopy(centerBeta, 0, originalBeta, 0, betaSize); // no change needed, just copy over
-
-    return originalBeta;
-  }
-
-  public static int copyGLMCoeffNames2GAMCoeffNames(GAMModel model, GLMModel glm) {
-      int numGamCols = model._gamColNamesNoCentering.length;
-      String[] glmColNames = glm._output.coefficientNames();
-      int lastGLMCoeffIndex = glmColNames.length-1;
-      int lastGAMCoeffIndex = lastGLMCoeffIndex+numGamCols;
-      int gamNumColStart = find(glmColNames, model._gamColNames[0][0]);
-      int gamLengthCopied = gamNumColStart;
-      System.arraycopy(glmColNames, 0, model._output._coefficient_names_no_centering, 0, gamLengthCopied); // copy coeff names before gam columns
-      for (int gamColInd = 0; gamColInd < numGamCols; gamColInd++) {
-        System.arraycopy(
-                model._gamColNamesNoCentering[gamColInd], 0, 
-                model._output._coefficient_names_no_centering, gamLengthCopied,
-                model._gamColNamesNoCentering[gamColInd].length
-        );
-        gamLengthCopied += model._gamColNamesNoCentering[gamColInd].length;
-      }
-      model._output._coefficient_names_no_centering[lastGAMCoeffIndex] = new String(glmColNames[lastGLMCoeffIndex]);
-      return gamNumColStart;
-  }
-
   public static void keepFrameKeys(List<Key<Vec>> keep, Key<Frame> ... keyNames) {
     for (Key<Frame> keyName:keyNames) {
       Frame loadingFrm = DKV.getGet(keyName);
       if (loadingFrm != null) for (Vec vec : loadingFrm.vecs()) keep.add(vec._key);
     }
+  }
+
+  public static boolean setDefaultBSType(GAMParameters parms) {
+    boolean thin_plate_smoothers_used = false;
+    parms._bs = new int[parms._gam_columns.length];
+    for (int index = 0; index < parms._bs.length; index++) {
+      if (parms._gam_columns[index].length > 1) {
+        parms._bs[index] = 0;
+      } else {
+        parms._bs[index] = 1;
+        thin_plate_smoothers_used = true;
+      }
+    }
+    return thin_plate_smoothers_used;
+  }
+
+  public static void setThinPlateParameters(GAMParameters parms) {
+    int numGamCols = parms._gam_columns.length;
+    parms._gamPredSize = MemoryManager.malloc4(numGamCols);
+    parms._m = MemoryManager.malloc4(numGamCols);
+    parms._M = MemoryManager.malloc4(numGamCols);
+    for (int index = 0; index < numGamCols; index++) {
+      if (parms._bs[index] == 1) { // todo: add in bs==2 when it is supported
+        parms._gamPredSize[index] = parms._gam_columns[index].length;
+        parms._m[index] = calculatem(parms._gamPredSize[index]);
+        parms._M[index] = calculateM(parms._gamPredSize[index], parms._m[index]);
+      }
+    }
+  }
+
+  // This method will generate knot locations by choosing them from a uniform quantile distribution of that
+  // chosen column.
+  public static double[] generateKnotsOneColumn(Frame gamFrame, int knotNum) {
+    double[] knots = MemoryManager.malloc8d(knotNum);
+    try {
+      Scope.enter();
+      Frame tempFrame = new Frame(gamFrame);  // make sure we have a frame key
+      DKV.put(tempFrame);
+      double[] prob = MemoryManager.malloc8d(knotNum);
+      assert knotNum > 1;
+      double stepProb = 1.0 / (knotNum - 1);
+      for (int knotInd = 0; knotInd < knotNum; knotInd++)
+        prob[knotInd] = knotInd * stepProb;
+      QuantileModel.QuantileParameters parms = new QuantileModel.QuantileParameters();
+      parms._train = tempFrame._key;
+      parms._probs = prob;
+      QuantileModel qModel = new Quantile(parms).trainModel().get();
+      DKV.remove(tempFrame._key);
+      Scope.track_generic(qModel);
+      System.arraycopy(qModel._output._quantiles[0], 0, knots, 0, knotNum);
+    } finally {
+      Scope.exit();
+    }
+    return knots;
+  }
+
+  public static Frame prepareGamVec(int gam_column_index, GAMParameters parms) {
+    final Vec weights_column = (parms._weights_column == null) ? Vec.makeOne(parms.train().numRows())
+            : parms.train().vec(parms._weights_column);
+    final Frame predictVec = new Frame();
+    int numPredictors = parms._gam_columns[gam_column_index].length;
+    for (int colInd = 0; colInd < numPredictors; colInd++)
+      predictVec.add(parms._gam_columns[gam_column_index][colInd],
+              parms._train.get().vec(parms._gam_columns[gam_column_index][colInd]));
+    predictVec.add("weights_column", weights_column); // add weight columns for CV support
+    return predictVec;
+  }
+
+  public static String[] generateGamColNames(int gam_col_index, GAMParameters parms) {
+    String[] newColNames = new String[parms._num_knots[gam_col_index]];
+    StringBuffer nameStub = new StringBuffer();
+    int numPredictors = parms._gam_columns[gam_col_index].length;
+    for (int predInd = 0; predInd < numPredictors; predInd++) {
+      nameStub.append(parms._gam_columns[gam_col_index][predInd]+"_");
+    }
+    String stubName = nameStub.toString();
+    for (int knotIndex = 0; knotIndex < parms._num_knots[gam_col_index]; knotIndex++) {
+      newColNames[knotIndex] = stubName+knotIndex;
+    }
+    return newColNames;
+  }
+
+  public static Frame buildGamFrame(GAMParameters parms, Frame train, Key<Frame>[] gamFrameKeysCenter) {
+    Vec responseVec = train.remove(parms._response_column);
+    Vec weightsVec = null;
+    if (parms._weights_column != null) // move weight vector to be the last vector before response variable
+      weightsVec = train.remove(parms._weights_column);
+    for (int colIdx = 0; colIdx < parms._gam_columns.length; colIdx++) {  // append the augmented columns to _train
+      Frame gamFrame = Scope.track(gamFrameKeysCenter[colIdx].get());
+      train.add(gamFrame.names(), gamFrame.removeAll());
+      train.remove(parms._gam_columns[colIdx]);
+    }
+    if (weightsVec != null)
+      train.add(parms._weights_column, weightsVec);
+    if (responseVec != null)
+      train.add(parms._response_column, responseVec);
+    return train;
   }
 }

@@ -28,6 +28,9 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
   private static final String[] BINOMIAL_CLASS_NAMES = new String[]{"0", "1"};
   public String[][] _gamColNamesNoCentering; // store column names only for GAM columns
   public String[][] _gamColNames; // store column names only for GAM columns after decentering
+  public int[] _gamPredSize;  // store size of predictors for gam smoother
+  public int[] _m;  // parameter related to gamPredSize;
+  public int[] _M;  // size of polynomial basis for thin plate regression smoothers
   public Key<Frame>[] _gamFrameKeysCenter;
   public double[] _gamColMeans;
   public int _nclass; // 2 for binomial, > 2 for multinomial and ordinal
@@ -82,8 +85,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     return tableCopy;
   }
   
-  TwoDimTable genCoefficientTable(String[] colHeaders, double[] coefficients, double[] coefficientsStand,
-                                  String[] coefficientNames, String tableHeader) {
+  public TwoDimTable genCoefficientTable(String[] colHeaders, double[] coefficients, double[] coefficientsStand,
+                                         String[] coefficientNames, String tableHeader) {
     String[] colTypes = new String[]{ "double", "double"};
     String[] colFormat = new String[]{"%5f", "%5f"};
     int nCoeff = coefficients.length;
@@ -99,8 +102,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     return table;
   }
 
-  TwoDimTable genCoefficientMagTableMultinomial(String[] colHeaders, double[][] coefficients,
-                                     String[] coefficientNames, String tableHeader) {
+  public TwoDimTable genCoefficientMagTableMultinomial(String[] colHeaders, double[][] coefficients,
+                                                       String[] coefficientNames, String tableHeader) {
     String[] colTypes = new String[]{ "double", "string"};
     String[] colFormat = new String[]{"%5f", ""};
     int nCoeff = coefficients[0].length;
@@ -142,8 +145,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     return table;
   }
 
-  TwoDimTable genCoefficientMagTable(String[] colHeaders, double[] coefficients,
-                                  String[] coefficientNames, String tableHeader) {
+  public TwoDimTable genCoefficientMagTable(String[] colHeaders, double[] coefficients,
+                                            String[] coefficientNames, String tableHeader) {
     String[] colTypes = new String[]{ "double", "string"};
     String[] colFormat = new String[]{"%5f", ""};
     int nCoeff = coefficients.length;
@@ -186,8 +189,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     }
   }
   
-  TwoDimTable genCoefficientTableMultinomial(String[] colHeaders, double[][] coefficients, double[][] coefficients_stand, 
-                                                     String[] coefficientNames, String tableHeader) {
+  public TwoDimTable genCoefficientTableMultinomial(String[] colHeaders, double[][] coefficients, double[][] coefficients_stand,
+                                                    String[] coefficientNames, String tableHeader) {
     String[] colTypes = new String[]{"double", "double"};
     String[] colFormat = new String[]{"%5f", "%5f"};
     int nCoeff = coefficients[0].length;
@@ -262,6 +265,9 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
     public int[] _num_knots; // array storing number of knots per basis function
     public String[] _knot_ids;  // store frame keys that contain knots location for each gam column in gam_X;
     public String[][] _gam_columns; // array storing which predictor columns are needed
+    public int[] _gamPredSize;  // store size of predictors for gam smoother
+    public int[] _m;  // parameter related to gamPredSize;
+    public int[] _M;  // size of polynomial basis for thin plate regression smoothers
     public int[] _bs; // choose spline function for gam column, 0 = cr, 1 = thin plate regression with knots, 2 = thin plate regression with SVD
     public double[] _scale;  // array storing scaling values to control wriggliness of fit
     public boolean _saveZMatrix = false;  // if asserted will save Z matrix

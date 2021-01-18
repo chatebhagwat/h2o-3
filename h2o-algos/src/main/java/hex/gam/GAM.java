@@ -1,14 +1,15 @@
 package hex.gam;
 
-import hex.*;
+import hex.DataInfo;
+import hex.ModelBuilder;
+import hex.ModelCategory;
+import hex.ModelMetrics;
 import hex.gam.GAMModel.GAMParameters;
 import hex.gam.MatrixFrameUtils.GamUtils;
 import hex.gam.MatrixFrameUtils.GenerateGamMatrixOneColumn;
 import hex.glm.GLM;
 import hex.glm.GLMModel;
 import hex.glm.GLMModel.GLMParameters;
-import hex.quantile.Quantile;
-import hex.quantile.QuantileModel;
 import jsr166y.ForkJoinTask;
 import jsr166y.RecursiveAction;
 import water.*;
@@ -23,8 +24,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static hex.ModelMetrics.calcVarImp;
 import static hex.gam.GAMModel.cleanUpInputFrame;
+import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMCoeffs;
+import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMtoGAMModel;
 import static hex.gam.MatrixFrameUtils.GamUtils.*;
 import static hex.gam.MatrixFrameUtils.GamUtils.AllocateType.*;
 import static hex.genmodel.utils.ArrayUtils.flat;
@@ -39,6 +41,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
   private double[][][] _knots; // Knots for splines
   private double[] _cv_alpha = null;  // best alpha value found from cross-validation
   private double[] _cv_lambda = null; // bset lambda value found from cross-validation
+  private boolean _thin_plate_smoothers_used = false;
   
   @Override
   public ModelCategory[] can_build() {
@@ -116,7 +119,6 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     int numGamCols = totalArrayDimension(_parms._gam_columns); // total number of predictors in all smoothers
     double[][][] knots = new double[numGamCols][][]; // 1st index into gam column, 2nd index number of knots for the row
     boolean allNull = _parms._knot_ids == null;
-    int knotIndex = 0;
     for (int outIndex = 0; outIndex < _parms._gam_columns.length; outIndex++) {
       String tempKey = allNull ? null : _parms._knot_ids[outIndex]; // one knot_id for each smoother
       knots[outIndex] = new double[_parms._gam_columns[outIndex].length][];
@@ -134,7 +136,6 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
                   knots[outIndex][innerIndex].length);
           if (knotCTranspose.length == 1 && _parms._bs[outIndex] == 0) // only check for order to single smoothers
             failVerifyKnots(knots[outIndex][innerIndex], outIndex);
-          knotIndex++;
         }
         _parms._num_knots[outIndex] = knotContent.length;
 
@@ -144,13 +145,11 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         if (_parms._gam_columns[outIndex].length == 1) {
           knots[outIndex][0] = generateKnotsOneColumn(predictVec, _parms._num_knots[outIndex]);
           failVerifyKnots(knots[outIndex][0], outIndex);
-          knotIndex++;
         } else {  // generate knots for multi-predictor smooths, randomly choose rows in parms._num_knots
           long[] randomRowVec = longRandomVector(_parms._seed, 
                   _parms._num_knots[outIndex]+(int)predictVec.naCount(), predictVec.numRows());
           int rowCount = 0;
-          knots[outIndex] = new double[_parms._gam_columns[outIndex].length][_parms._num_knots[outIndex]];
-          
+          knots[outIndex] = MemoryManager.malloc8d(_parms._gam_columns[outIndex].length, _parms._num_knots[outIndex]);
           boolean foundNAinRow = false;
           for (int rowInd = 0; rowInd < randomRowVec.length; rowInd++) {
             if (rowCount >= _parms._num_knots[outIndex])
@@ -166,7 +165,6 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
             if (!foundNAinRow)
               rowCount++;
           }
-          knotIndex += _parms._gam_columns[outIndex].length;
         }
       }
     }
@@ -200,32 +198,6 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       }
     }
   }
-
-  // This method will generate knot locations by choosing them from a uniform quantile distribution of that
-  // chosen column.
-  public double[] generateKnotsOneColumn(Frame gamFrame, int knotNum) {
-    double[] knots = MemoryManager.malloc8d(knotNum);
-    try {
-      Scope.enter();
-      Frame tempFrame = new Frame(gamFrame);  // make sure we have a frame key
-      DKV.put(tempFrame);
-      double[] prob = MemoryManager.malloc8d(knotNum);
-      assert knotNum > 1;
-      double stepProb = 1.0 / (knotNum - 1);
-      for (int knotInd = 0; knotInd < knotNum; knotInd++)
-        prob[knotInd] = knotInd * stepProb;
-      QuantileModel.QuantileParameters parms = new QuantileModel.QuantileParameters();
-      parms._train = tempFrame._key;
-      parms._probs = prob;
-      QuantileModel qModel = new Quantile(parms).trainModel().get();
-      DKV.remove(tempFrame._key);
-      Scope.track_generic(qModel);
-      System.arraycopy(qModel._output._quantiles[0], 0, knots, 0, knotNum);
-    } finally {
-      Scope.exit();
-    }
-    return knots;
-  }
   
   @Override
   public void init(boolean expensive) {
@@ -257,11 +229,13 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     else  // check and make sure gam_columns column types are legal
       assertLegalGamColumnsNBSTypes();
     if (_parms._bs == null) {
-      setDefaultBSType();
+      _thin_plate_smoothers_used = _thin_plate_smoothers_used || setDefaultBSType(_parms);
     }
     if ((_parms._bs != null) && (_parms._gam_columns.length != _parms._bs.length))  // check length
       error("gam colum number", "Number of gam columns implied from _bs and _gam_columns do not " +
               "match.");
+    if (_thin_plate_smoothers_used)
+      setThinPlateParameters(_parms); // set the m, M for thin plate regression smoothers
     checkOrChooseNumKnots(); // check valid num_knot assignment or choose num_knots
     if ((_parms._num_knots != null) && (_parms._num_knots.length != _parms._gam_columns.length))
       error("gam colum number", "Number of gam columns implied from _num_knots and _gam_columns do" +
@@ -272,6 +246,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
                 " not match.");
     }
     _knots = generateKnotsFromKeys(); // generate knots and verify that they are given correctly
+    checkThinPlateParams();
     if (_parms._saveZMatrix && ((_train.numCols() - 1 + _parms._num_knots.length) < 2))
       error("_saveZMatrix", "can only be enabled if we number of predictors plus" +
               " Gam columns in gam_columns exceeds 2");
@@ -291,8 +266,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     }
     if (_parms._link == null || _parms._link.equals(GLMParameters.Link.family_default))
       _parms._link = _parms._family.defaultLink;
-
-
+    
     if ((_parms._family == GLMParameters.Family.multinomial || _parms._family == GLMParameters.Family.ordinal ||
             _parms._family == GLMParameters.Family.binomial)
             && response().get_type() != Vec.T_CAT) {
@@ -301,13 +275,17 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     }
   }
   
-  public void setDefaultBSType() {
-    _parms._bs = new int[_parms._gam_columns.length];
-    for (int index = 0; index < _parms._bs.length; index++) {
-      if (_parms._gam_columns[index].length > 1)
-        _parms._bs[index] = 0;
-      else
-        _parms._bs[index] = 1;
+  public void checkThinPlateParams() {
+    if (!_thin_plate_smoothers_used)
+      return;
+    
+    int numGamCols = _parms._gam_columns.length;
+    for (int index = 0; index < numGamCols; index++) {
+      if (_parms._bs[index] == 1) {
+        if (_parms._num_knots[index] <= _parms._M[index]+1)
+          error("num_knots", "num_knots for gam column start with  "+_parms._gam_columns[index][0]+
+                  " did not specify enough num_knots.  It should be "+(_parms._M[index]+1)+" or higher.");
+      }
     }
   }
   
@@ -323,8 +301,11 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
           naSum += _parms.train().vec(_parms._gam_columns[index][innerIndex]).naCnt();
         }
         long eligibleRows = _train.numRows()-naSum;
-        if (_parms._num_knots[index] == 0) {
-          _parms._num_knots[index] = eligibleRows < 10 ? (int) eligibleRows : 10;
+        if (_parms._num_knots[index] == 0) {  // set num_knots to default
+          int defaultRows = 10;
+          if (_parms._bs[index] == 1)
+            defaultRows = Math.max(defaultRows, _parms._M[index]+1);
+          _parms._num_knots[index] = eligibleRows < defaultRows ? (int) eligibleRows : defaultRows;
         } else {  // num_knots assigned by user and check to make sure it is legal
           if (numKnots > eligibleRows) {
             error("_num_knots", " number of knots specified in _num_knots: "+numKnots+" for smoother" +
@@ -340,6 +321,8 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     List<String> cNames = Arrays.asList(dataset.names());
     for (int index = 0; index < _parms._gam_columns.length; index++) {
       if (_parms._bs != null) { // check and make sure the correct bs type is chosen
+        if (_parms._bs[index] == 1) // todo add support for bs==2
+          _thin_plate_smoothers_used = true;
         if (_parms._gam_columns[index].length == 1 && _parms._bs[index] != 0) 
           error("bs", "column name" + _parms._gam_columns[index][0]+" is the single predictor of" +
                   " a smoother and can only use bs = 0");
@@ -414,52 +397,17 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       _gamColMeans = new double[numGamFrame][];
 
       addGAM2Train();  // add GAM columns to training frame
-      return buildGamFrame(); // add gam cols to _train
-    }
-
-    public Frame buildGamFrame() {
-      Vec responseVec = _train.remove(_parms._response_column);
-      Vec weightsVec = null;
-      if (_parms._weights_column != null) // move weight vector to be the last vector before response variable
-        weightsVec = _train.remove(_parms._weights_column);
-      for (int colIdx = 0; colIdx < _parms._gam_columns.length; colIdx++) {  // append the augmented columns to _train
-        Frame gamFrame = Scope.track(_gamFrameKeysCenter[colIdx].get());
-        _train.add(gamFrame.names(), gamFrame.removeAll());
-        _train.remove(_parms._gam_columns[colIdx]);
-      }
-      if (weightsVec != null)
-        _train.add(_parms._weights_column, weightsVec);
-      if (responseVec != null)
-        _train.add(_parms._response_column, responseVec);
-      return _train;
+      return buildGamFrame(_parms, _train, _gamFrameKeysCenter); // add gam cols to _train
     }
     
-    Frame prepareGamVec(int gam_column_index) {
-      final Vec weights_column = (_parms._weights_column == null) ? Vec.makeOne(_parms.train().numRows())
-              : _parms.train().vec(_parms._weights_column);
-      final Frame predictVec = new Frame();
-      int numPredictors = _parms._gam_columns[gam_column_index].length;
-      for (int colInd = 0; colInd < numPredictors; colInd++)
-        predictVec.add(_parms._gam_columns[gam_column_index][colInd], 
-                _parms._train.get().vec(_parms._gam_columns[gam_column_index][colInd]));
-      predictVec.add("weights_column", weights_column); // add weight columns for CV support
-      return predictVec;
+    public class ThinPlateRegressionSmootherWithKnots extends RecursiveAction {
+
+      @Override
+      protected void compute() {
+        
+      }
     }
     
-    String[] generateGamColNames(int gam_col_index) {
-      String[] newColNames = new String[_parms._num_knots[gam_col_index]];
-      StringBuffer nameStub = new StringBuffer();
-      int numPredictors = _parms._gam_columns[gam_col_index].length;
-      for (int predInd = 0; predInd < numPredictors; predInd++) {
-        nameStub.append(_parms._gam_columns[gam_col_index][predInd]+"_");
-      }
-      String stubName = nameStub.toString();
-      for (int knotIndex = 0; knotIndex < _parms._num_knots[gam_col_index]; knotIndex++) {
-        newColNames[knotIndex] = stubName+knotIndex;
-      }
-      return newColNames;
-    }
-
     public class CubicSplineSmoother extends RecursiveAction {
       final Frame _predictVec;
       final int _numKnots;
@@ -512,8 +460,8 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       int numGamFrame = _parms._gam_columns.length; // number of smoothers to generate
       RecursiveAction[] generateGamColumn = new RecursiveAction[numGamFrame];
       for (int index = 0; index < numGamFrame; index++) { // generate smoothers/splines
-        final Frame predictVec = prepareGamVec(index);  // extract predictors from training frame
-        _gamColNames[index] = generateGamColNames(index);
+        final Frame predictVec = prepareGamVec(index, _parms);  // extract predictors from training frame
+        _gamColNames[index] = generateGamColNames(index, _parms);
         int numKnots = _parms._num_knots[index];
         int numKnotsM1 = numKnots - 1;
         if (_parms._gam_columns[index].length == 1 && _parms._bs[index] == 0) {// single predictor smoothers
@@ -521,7 +469,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
           _gamColMeans[index] = new double[numKnots];
           generateGamColumn[index] = new CubicSplineSmoother(predictVec, _parms, index, _gamColNames[index],
                   _knots[index][0], firstTwoLess);
-        } else if (_parms._bs[index] == 1) { // 
+        } else if (_parms._bs[index] == 1) {
           generateGamColumn[index] = new ThinPlateRegressionSmootherWithKnots();
         }
       }
@@ -594,7 +542,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         }
         Scope.track_generic(glmModel);
         _job.update(0, "Building out GAM model...");
-        fillOutGAMModel(glmModel, model, dinfo); // build up GAM model
+        fillOutGAMModel(glmModel, model); // build up GAM model
         model.update(_job);
         // build GAM Model Metrics
         _job.update(0, "Scoring training frame");
@@ -669,8 +617,8 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       glmParam._glmType = gam;
       return new GLM(glmParam, _penalty_mat_center,  _gamColNamesCenter).trainModel().get();
     }
-    
-    void fillOutGAMModel(GLMModel glm, GAMModel model, DataInfo dinfo) {
+
+    void fillOutGAMModel(GLMModel glm, GAMModel model) {
       model._gamColNamesNoCentering = _gamColNames;  // copy over gam column names
       model._gamColNames = _gamColNamesCenter;
       model._output._gamColNames = _gamColNamesCenter;
@@ -694,90 +642,8 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         model._output._penaltyMatrices_center = _penalty_mat_center;
         model._output._penaltyMatrices = _penalty_mat;
       }
-      copyGLMCoeffs(glm, model);  // copy over coefficient names and generate coefficients as beta = z*GLM_beta
-      copyGLMtoGAMModel(model, glm);  // copy over fields from glm model to gam model
-    }
-    
-    private void copyGLMtoGAMModel(GAMModel model, GLMModel glmModel) {
-      model._output._glm_best_lamda_value = glmModel._output.bestSubmodel().lambda_value; // exposed best lambda used
-      model._output._glm_training_metrics = glmModel._output._training_metrics;
-      if (valid() != null)
-        model._output._glm_validation_metrics = glmModel._output._validation_metrics;
-      model._output._glm_model_summary = model.copyTwoDimTable(glmModel._output._model_summary);
-      model._output._glm_scoring_history = model.copyTwoDimTable(glmModel._output._scoring_history);
-      if (_parms._family == multinomial || _parms._family == ordinal) {
-        model._output._coefficients_table = model.genCoefficientTableMultinomial(new String[]{"Coefficients",
-                        "Standardized Coefficients"}, model._output._model_beta_multinomial,
-                model._output._standardized_model_beta_multinomial, model._output._coefficient_names,"GAM Coefficients");
-        model._output._coefficients_table_no_centering = model.genCoefficientTableMultinomial(new String[]{"coefficients " +
-                        "no centering", "standardized coefficients no centering"}, 
-                model._output._model_beta_multinomial_no_centering, model._output._standardized_model_beta_multinomial_no_centering, 
-                model._output._coefficient_names_no_centering,"GAM Coefficients No Centering");
-        model._output._standardized_coefficient_magnitudes = model.genCoefficientMagTableMultinomial(new String[]{"coefficients", "signs"},
-                model._output._standardized_model_beta_multinomial, model._output._coefficient_names, "standardized coefficients magnitude");
-      } else{
-        model._output._coefficients_table = model.genCoefficientTable(new String[]{"coefficients", "standardized coefficients"}, model._output._model_beta,
-                model._output._standardized_model_beta, model._output._coefficient_names, "GAM Coefficients");
-        model._output._coefficients_table_no_centering = model.genCoefficientTable(new String[]{"coefficients no centering", 
-                        "standardized coefficients no centering"}, model._output._model_beta_no_centering,
-                model._output._standardized_model_beta_no_centering,
-                model._output._coefficient_names_no_centering, 
-                "GAM Coefficients No Centering");
-        model._output._standardized_coefficient_magnitudes = model.genCoefficientMagTable(new String[]{"coefficients", "signs"}, 
-                model._output._standardized_model_beta, model._output._coefficient_names, "standardized coefficients magnitude");
-      }
-      
-      if (_parms._compute_p_values) {
-        model._output._glm_zvalues = glmModel._output.zValues().clone();
-        model._output._glm_pvalues = glmModel._output.pValues().clone();
-        model._output._glm_stdErr = glmModel._output.stdErr().clone();
-        model._output._glm_vcov = glmModel._output.vcov().clone();
-      }
-      model._output._glm_dispersion = glmModel._output.dispersion();
-      model._nobs = glmModel._nobs;
-      model._nullDOF = glmModel._nullDOF;
-      model._ymu = new double[glmModel._ymu.length];
-      model._rank = glmModel._output.bestSubmodel().rank();
-      model._ymu = new double[glmModel._ymu.length];
-      System.arraycopy(glmModel._ymu, 0, model._ymu, 0, glmModel._ymu.length);
-      // pass GLM _solver value to GAM so that GAM effective _solver value can be set
-      if (model.evalAutoParamsEnabled && model._parms._solver == GLMParameters.Solver.AUTO) {
-        model._parms._solver = glmModel._parms._solver;
-      }
-      model._output._varimp = new VarImp(glmModel._output._varimp._varimp, glmModel._output._varimp._names);
-      model._output._variable_importances = calcVarImp(model._output._varimp);
-    }
-    
-    void copyGLMCoeffs(GLMModel glm, GAMModel model) {
-      boolean multiClass = _parms._family == multinomial || _parms._family == ordinal;
-      int totCoefNumsNoCenter = (multiClass?glm.coefficients().size()/nclasses():glm.coefficients().size())
-              +_parms._gam_columns.length;
-      model._output._coefficient_names_no_centering = new String[totCoefNumsNoCenter]; // copy coefficient names from GLM to GAM
-      int gamNumStart = copyGLMCoeffNames2GAMCoeffNames(model, glm);
-      copyGLMCoeffs2GAMCoeffs(model, glm, _parms._family, gamNumStart, _nclass); // obtain beta without centering
-      // copy over GLM coefficients
-      int glmCoeffLen = glm._output._coefficient_names.length;
-      model._output._coefficient_names = new String[glmCoeffLen];
-      System.arraycopy(glm._output._coefficient_names, 0, model._output._coefficient_names, 0,
-              glmCoeffLen);
-      if (multiClass) {
-        double[][] model_beta_multinomial = glm._output.get_global_beta_multinomial();
-        double[][] standardized_model_beta_multinomial = glm._output.getNormBetaMultinomial();
-        model._output._model_beta_multinomial = new double[_nclass][glmCoeffLen];
-        model._output._standardized_model_beta_multinomial = new double[_nclass][glmCoeffLen];
-        for (int classInd = 0; classInd < _nclass; classInd++) {
-          System.arraycopy(model_beta_multinomial[classInd], 0, model._output._model_beta_multinomial[classInd],
-                  0, glmCoeffLen);
-          System.arraycopy(standardized_model_beta_multinomial[classInd], 0, 
-                  model._output._standardized_model_beta_multinomial[classInd], 0, glmCoeffLen);
-        }
-      } else {
-        model._output._model_beta = new double[glmCoeffLen];
-        model._output._standardized_model_beta = new double[glmCoeffLen];
-        System.arraycopy(glm._output.beta(), 0, model._output._model_beta, 0, glmCoeffLen);
-        System.arraycopy(glm._output.getNormBeta(), 0, model._output._standardized_model_beta, 0, 
-                glmCoeffLen);
-      }
+      copyGLMCoeffs(glm, model, _parms, nclasses());  // copy over coefficient names and generate coefficients as beta = z*GLM_beta
+      copyGLMtoGAMModel(model, glm, _parms, valid());  // copy over fields from glm model to gam model
     }
   }
 }
