@@ -144,9 +144,9 @@ public class GamUtils {
     parms._bs = new int[parms._gam_columns.length];
     for (int index = 0; index < parms._bs.length; index++) {
       if (parms._gam_columns[index].length > 1) {
-        parms._bs[index] = 0;
-      } else {
         parms._bs[index] = 1;
+      } else {
+        parms._bs[index] = 0;
       }
     }
   }
@@ -217,6 +217,13 @@ public class GamUtils {
       newColNames[knotIndex] = stubName+knotIndex;
     }
     return newColNames;
+  }
+  
+  public static String[] generateGamColNamesThinPlateKnots(int gamColIndex, GAMParameters parms, 
+                                                           List<Integer[]> polyBasisDegree) {
+    int colNameSize = polyBasisDegree.size() + parms._num_knots[gamColIndex];
+    String[] gamColNames = new String[colNameSize];
+    return gamColNames;
   }
 
   public static Frame buildGamFrame(GAMParameters parms, Frame train, Key<Frame>[] gamFrameKeysCenter) {

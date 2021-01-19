@@ -5,6 +5,7 @@ import water.MemoryManager;
 import water.fvec.Chunk;
 import water.fvec.NewChunk;
 
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculatem;
 import static org.apache.commons.math3.util.CombinatoricsUtils.factorial;
 
 // Implementation details of this class can be found in GamThinPlateRegressionH2O.doc attached to this 
@@ -20,13 +21,13 @@ public class ThinPlateDistanceWithKnots extends MRTask<ThinPlateDistanceWithKnot
   final int _numPred;
   final int _distancePower;
   
-  public ThinPlateDistanceWithKnots(double[][] knots, int d, int m, int weightColInd) {
+  public ThinPlateDistanceWithKnots(double[][] knots, int d) {
     _knots = knots;
     _knotNum = _knots.length;
     _d = d;
     _dEven = _d/2==0;
-    _m = m;
-    _weightID = weightColInd;
+    _m = calculatem(_d);
+    _weightID = _d; // weight column index
     _numPred = _knots[0].length;
     _distancePower = 2*_m-_d;
     if (d/2 == 0)

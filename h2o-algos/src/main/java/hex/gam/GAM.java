@@ -5,6 +5,7 @@ import hex.ModelBuilder;
 import hex.ModelCategory;
 import hex.ModelMetrics;
 import hex.gam.GAMModel.GAMParameters;
+import hex.gam.GamSplines.ThinPlateDistanceWithKnots;
 import hex.gam.MatrixFrameUtils.GamUtils;
 import hex.gam.MatrixFrameUtils.GenerateGamMatrixOneColumn;
 import hex.glm.GLM;
@@ -25,6 +26,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import static hex.gam.GAMModel.cleanUpInputFrame;
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculatem;
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.findPolybasis;
 import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMCoeffs;
 import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMtoGAMModel;
 import static hex.gam.MatrixFrameUtils.GamUtils.*;
@@ -228,7 +231,8 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
               " use GLM.");
     else  // check and make sure gam_columns column types are legal
       assertLegalGamColumnsNBSTypes();
-    setDefaultBSType(_parms);
+    if (_parms._bs == null)
+      setDefaultBSType(_parms);
     
     if ((_parms._bs != null) && (_parms._gam_columns.length != _parms._bs.length))  // check length
       error("gam colum number", "Number of gam columns implied from _bs and _gam_columns do not " +
@@ -406,14 +410,14 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       final int _numKnots;
       final int _splineType;
       final boolean _savePenaltyMat;
-      final String[] _newColNames;
-      final double[] _knots;
+      final double[][] _knots;
       final GAMParameters _parms;
       final int _gamColIndex;
       final int _thinPlateGamColIndex;
+      final int _numPred; // number of predictors
       
-      public ThinPlateRegressionSmootherWithKnots(Frame predV, GAMParameters parms, int gamColIndex, 
-                                                  String[] gamColNames, double[] knots, AllocateType fileM, int thinPlateInd) {
+      public ThinPlateRegressionSmootherWithKnots(Frame predV, GAMParameters parms, int gamColIndex, double[][] knots,
+                                                  int thinPlateInd) {
         _predictVec  = predV;
         _knots = knots;
         _numKnots = knots.length;
@@ -422,13 +426,19 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         _gamColIndex = gamColIndex;
         _thinPlateGamColIndex = thinPlateInd;
         _savePenaltyMat = _parms._savePenaltyMat;
-        _newColNames = gamColNames;
+        _numPred = parms._gam_columns[gamColIndex].length;
       }
 
       @Override
       protected void compute() {
         // generate the Xnmd as described in 3.1 of GamThinPlatRegressionH2O doc
+        ThinPlateDistanceWithKnots distanceMeasure = 
+                new ThinPlateDistanceWithKnots(_knots, _numPred).doAll(_numKnots, Vec.T_NUM, _predictVec);
         // generate polynomial basis lists as described in 3.2 of GamThinPlatRegressionH2O doc
+        List<Integer[]> polyBasisDegree = findPolybasis(_numPred, calculatem(_numPred));
+        // generate gam column names before any processing
+        String[] gamColNames = generateGamColNamesThinPlateKnots(_gamColIndex, _parms, polyBasisDegree);
+        // generate T* for all knots
         // generate Zcs as in 3.3
         // generate Xcs as in 3.3
         // generate polynomial basis T as in 3.2
@@ -489,18 +499,20 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     void addGAM2Train() {
       int numGamFrame = _parms._gam_columns.length; // number of smoothers to generate
       RecursiveAction[] generateGamColumn = new RecursiveAction[numGamFrame];
+      int thinPlateInd = 0;
       for (int index = 0; index < numGamFrame; index++) { // generate smoothers/splines
         final Frame predictVec = prepareGamVec(index, _parms);  // extract predictors from training frame
-        _gamColNames[index] = generateGamColNames(index, _parms);
         int numKnots = _parms._num_knots[index];
         int numKnotsM1 = numKnots - 1;
         if (_parms._gam_columns[index].length == 1 && _parms._bs[index] == 0) {// single predictor smoothers
+          _gamColNames[index] = generateGamColNames(index, _parms);
           _gamColNamesCenter[index] = new String[numKnotsM1];
           _gamColMeans[index] = new double[numKnots];
           generateGamColumn[index] = new CubicSplineSmoother(predictVec, _parms, index, _gamColNames[index],
                   _knots[index][0], firstTwoLess);
         } else if (_parms._bs[index] == 1) {
-          generateGamColumn[index] = new ThinPlateRegressionSmootherWithKnots();
+          generateGamColumn[index] = new ThinPlateRegressionSmootherWithKnots(predictVec, _parms, index, _knots[index], 
+                  thinPlateInd++);
         }
       }
       ForkJoinTask.invokeAll(generateGamColumn);
@@ -538,12 +550,9 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       if (newValidFrame != null) {
         DKV.put(newValidFrame);
       }
-
       _job.update(0, "Initializing model training");
       buildModel(newTFrame, newValidFrame); // build gam model
-
     }
-
 
     public final void buildModel(Frame newTFrame, Frame newValidFrame) {
       GAMModel model = null;

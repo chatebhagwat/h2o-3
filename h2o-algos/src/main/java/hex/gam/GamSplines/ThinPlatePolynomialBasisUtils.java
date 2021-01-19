@@ -72,7 +72,7 @@ public class ThinPlatePolynomialBasisUtils {
     Integer[] allZeros = new Integer[onePolyBasis.get(0).length];
     for (int index = 0; index < allZeros.length; index++)
       allZeros[index] = 0;
-    allPermutes.add(allZeros);
+    allPermutes.add(0, allZeros); // add all zero to the front
     return allPermutes;
   }
   
