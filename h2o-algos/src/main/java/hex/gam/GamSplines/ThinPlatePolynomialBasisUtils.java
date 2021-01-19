@@ -8,7 +8,7 @@ import static water.util.ArrayUtils.maxValue;
 
 // This class contains functions that perform different functions for generating the thin plate regression splines
 // and the polynomial basis functions
-public class ThinPlateRegressionUtils {
+public class ThinPlatePolynomialBasisUtils {
   /***
    * For thin plate regression, given d (number of predictors for a smooth), it will return m where (m-1) is the
    * maximum polynomial degree in the polynomial basis functions.  The formular used is m = ceiling of (d+1)/2+1

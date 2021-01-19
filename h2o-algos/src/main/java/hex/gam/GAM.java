@@ -41,7 +41,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
   private double[][][] _knots; // Knots for splines
   private double[] _cv_alpha = null;  // best alpha value found from cross-validation
   private double[] _cv_lambda = null; // bset lambda value found from cross-validation
-  private boolean _thin_plate_smoothers_used = false;
+  private int _thinPlateSmoothersWithKnotsUsed = 0;
   
   @Override
   public ModelCategory[] can_build() {
@@ -228,14 +228,13 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
               " use GLM.");
     else  // check and make sure gam_columns column types are legal
       assertLegalGamColumnsNBSTypes();
-    if (_parms._bs == null) {
-      _thin_plate_smoothers_used = _thin_plate_smoothers_used || setDefaultBSType(_parms);
-    }
+    setDefaultBSType(_parms);
+    
     if ((_parms._bs != null) && (_parms._gam_columns.length != _parms._bs.length))  // check length
       error("gam colum number", "Number of gam columns implied from _bs and _gam_columns do not " +
               "match.");
-    if (_thin_plate_smoothers_used)
-      setThinPlateParameters(_parms); // set the m, M for thin plate regression smoothers
+    if (_thinPlateSmoothersWithKnotsUsed > 0)
+      setThinPlateParameters(_parms, _thinPlateSmoothersWithKnotsUsed); // set the m, M for thin plate regression smoothers
     checkOrChooseNumKnots(); // check valid num_knot assignment or choose num_knots
     if ((_parms._num_knots != null) && (_parms._num_knots.length != _parms._gam_columns.length))
       error("gam colum number", "Number of gam columns implied from _num_knots and _gam_columns do" +
@@ -276,7 +275,7 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
   }
   
   public void checkThinPlateParams() {
-    if (!_thin_plate_smoothers_used)
+    if (_thinPlateSmoothersWithKnotsUsed==0)
       return;
     
     int numGamCols = _parms._gam_columns.length;
@@ -321,14 +320,14 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     List<String> cNames = Arrays.asList(dataset.names());
     for (int index = 0; index < _parms._gam_columns.length; index++) {
       if (_parms._bs != null) { // check and make sure the correct bs type is chosen
-        if (_parms._bs[index] == 1) // todo add support for bs==2
-          _thin_plate_smoothers_used = true;
         if (_parms._gam_columns[index].length == 1 && _parms._bs[index] != 0) 
           error("bs", "column name" + _parms._gam_columns[index][0]+" is the single predictor of" +
                   " a smoother and can only use bs = 0");
         else if (_parms._gam_columns[index].length > 1 && _parms._bs[index] != 1)
           error("bs", "Smother with multiple predictors can only use bs = 1");        
-      }
+      } else if (_parms._gam_columns[index].length > 1)
+        _thinPlateSmoothersWithKnotsUsed++; // record number of thin plate 
+      
         
       for (int innerIndex = 0; innerIndex < _parms._gam_columns[index].length; innerIndex++) {
         String cname = _parms._gam_columns[index][innerIndex];
@@ -365,11 +364,13 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
 
   private class GAMDriver extends Driver {
     double[][][] _zTranspose; // store for each GAM predictor transpose(Z) matrix
+    double[][][] _zTransposeCS; // store for each thin plate smoother for removing optimization constraint
     double[][][] _penalty_mat_center;  // store for each GAM predictor the penalty matrix
-    double[][][] _penalty_mat;  // penalty matrix before centering
+    double[][][] _penalty_mat;  // penalty matrix before any kind of processing
+    double[][][] _penalty_mat_CS; // penalty matrix after removing optimization constraint, only for thin plate
     public double[][][] _binvD; // store BinvD for each gam column specified for scoring
     public int[] _numKnots;  // store number of knots per gam column
-    String[][] _gamColNames;  // store column names of GAM columns
+    String[][] _gamColNames;  // store column names of GAM columns before any processing
     String[][] _gamColNamesCenter;  // gamColNames after de-centering is performed.
     Key<Frame>[] _gamFrameKeys;
     Key<Frame>[] _gamFrameKeysCenter;
@@ -401,10 +402,39 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
     }
     
     public class ThinPlateRegressionSmootherWithKnots extends RecursiveAction {
+      final Frame _predictVec;
+      final int _numKnots;
+      final int _splineType;
+      final boolean _savePenaltyMat;
+      final String[] _newColNames;
+      final double[] _knots;
+      final GAMParameters _parms;
+      final int _gamColIndex;
+      final int _thinPlateGamColIndex;
+      
+      public ThinPlateRegressionSmootherWithKnots(Frame predV, GAMParameters parms, int gamColIndex, 
+                                                  String[] gamColNames, double[] knots, AllocateType fileM, int thinPlateInd) {
+        _predictVec  = predV;
+        _knots = knots;
+        _numKnots = knots.length;
+        _parms = parms;
+        _splineType = _parms._bs[gamColIndex];
+        _gamColIndex = gamColIndex;
+        _thinPlateGamColIndex = thinPlateInd;
+        _savePenaltyMat = _parms._savePenaltyMat;
+        _newColNames = gamColNames;
+      }
 
       @Override
       protected void compute() {
-        
+        // generate the Xnmd as described in 3.1 of GamThinPlatRegressionH2O doc
+        // generate polynomial basis lists as described in 3.2 of GamThinPlatRegressionH2O doc
+        // generate Zcs as in 3.3
+        // generate Xcs as in 3.3
+        // generate polynomial basis T as in 3.2
+        // concatenate Xcs and T
+        // generate Z for centering as in 3.4
+        // generate Xz as in 3.4
       }
     }
     

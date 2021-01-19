@@ -18,8 +18,8 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-import static hex.gam.GamSplines.ThinPlateRegressionUtils.calculateM;
-import static hex.gam.GamSplines.ThinPlateRegressionUtils.calculatem;
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculateM;
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculatem;
 
 public class GamUtils {
 
@@ -140,30 +140,29 @@ public class GamUtils {
     }
   }
 
-  public static boolean setDefaultBSType(GAMParameters parms) {
-    boolean thin_plate_smoothers_used = false;
+  public static void setDefaultBSType(GAMParameters parms) {
     parms._bs = new int[parms._gam_columns.length];
     for (int index = 0; index < parms._bs.length; index++) {
       if (parms._gam_columns[index].length > 1) {
         parms._bs[index] = 0;
       } else {
         parms._bs[index] = 1;
-        thin_plate_smoothers_used = true;
       }
     }
-    return thin_plate_smoothers_used;
   }
 
-  public static void setThinPlateParameters(GAMParameters parms) {
+  public static void setThinPlateParameters(GAMParameters parms, int thinPlateNum) {
     int numGamCols = parms._gam_columns.length;
-    parms._gamPredSize = MemoryManager.malloc4(numGamCols);
-    parms._m = MemoryManager.malloc4(numGamCols);
-    parms._M = MemoryManager.malloc4(numGamCols);
+    parms._gamPredSize = MemoryManager.malloc4(thinPlateNum);
+    parms._m = MemoryManager.malloc4(thinPlateNum);
+    parms._M = MemoryManager.malloc4(thinPlateNum);
+    int countThinPlate = 0;
     for (int index = 0; index < numGamCols; index++) {
-      if (parms._bs[index] == 1) { // todo: add in bs==2 when it is supported
-        parms._gamPredSize[index] = parms._gam_columns[index].length;
-        parms._m[index] = calculatem(parms._gamPredSize[index]);
-        parms._M[index] = calculateM(parms._gamPredSize[index], parms._m[index]);
+      if (parms._bs[countThinPlate] == 1) { // todo: add in bs==2 when it is supported
+        parms._gamPredSize[countThinPlate] = parms._gam_columns[index].length;
+        parms._m[countThinPlate] = calculatem(parms._gamPredSize[countThinPlate]);
+        parms._M[countThinPlate] = calculateM(parms._gamPredSize[countThinPlate], parms._m[countThinPlate]);
+        countThinPlate++;
       }
     }
   }
