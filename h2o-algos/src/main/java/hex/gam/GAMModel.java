@@ -31,6 +31,8 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
   public int[] _gamPredSize;  // store size of predictors for gam smoother
   public int[] _m;  // parameter related to gamPredSize;
   public int[] _M;  // size of polynomial basis for thin plate regression smoothers
+  public int _cubicSplineNum;
+  public int _thinPlateSmoothersWithKnotsNum;
   public Key<Frame>[] _gamFrameKeysCenter;
   public double[] _gamColMeans;
   public int _nclass; // 2 for binomial, > 2 for multinomial and ordinal
@@ -263,13 +265,18 @@ public class GAMModel extends Model<GAMModel, GAMModel.GAMParameters, GAMModel.G
 
     // the following parameters are for GAM
     public int[] _num_knots; // array storing number of knots per basis function
+    public int[] _num_knots_sorted;
+    public int[] _num_knots_tp; // store num_knots for thin plate regression
     public String[] _knot_ids;  // store frame keys that contain knots location for each gam column in gam_X;
     public String[][] _gam_columns; // array storing which predictor columns are needed
+    public String[][] _gam_columns_sorted;  // move CS spline to the front and tp to the back
     public int[] _gamPredSize;  // store size of predictors for gam smoother
     public int[] _m;  // parameter related to gamPredSize;
     public int[] _M;  // size of polynomial basis for thin plate regression smoothers
     public int[] _bs; // choose spline function for gam column, 0 = cr, 1 = thin plate regression with knots, 2 = thin plate regression with SVD
+    public int[] _bs_sorted; // choose spline function for gam column, 0 = cr, 1 = thin plate regression with knots, 2 = thin plate regression with SVD
     public double[] _scale;  // array storing scaling values to control wriggliness of fit
+    public double[] _scale_sorted;
     public boolean _saveZMatrix = false;  // if asserted will save Z matrix
     public boolean _keep_gam_cols = false;  // if true will save the keys to gam Columns only
     public boolean _savePenaltyMat = false; // if true will save penalty matrices as tripple array

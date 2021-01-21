@@ -1566,6 +1566,13 @@ public class ArrayUtils {
     return c;
   }
 
+  public static int [] subtract (int [] a, int [] b) {
+    int [] c = MemoryManager.malloc4 (a.length);
+    for (int i = 0; i < a.length; i++)
+      c[i] = a[i]-b[i];
+    return c;
+  }
+
   public static double[] subtract (double [] a, double [] b, double [] c) {
     for(int i = 0; i < a.length; ++i)
       c[i] = a[i] - b[i];

@@ -24,17 +24,41 @@ import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculatem;
 public class GamUtils {
 
   // allocate 3D array to store various information;
+  public static double[][][] allocate3DArrayCS(int num2DArrays, GAMParameters parms, AllocateType fileMode) {
+    double[][][] array3D = new double[num2DArrays][][];
+    int gamColCount = 0;
+    for (int frameIdx = 0; frameIdx < num2DArrays; frameIdx++) {
+      if (parms._gam_columns_sorted[frameIdx].length == 1) {
+        int numKnots = parms._num_knots_sorted[frameIdx];
+        array3D[gamColCount++] = allocate2DArray(fileMode, numKnots);
+      }
+    }
+    return array3D;
+  }
+
   public static double[][][] allocate3DArray(int num2DArrays, GAMParameters parms, AllocateType fileMode) {
     double[][][] array3D = new double[num2DArrays][][];
+    for (int frameIdx = 0; frameIdx < num2DArrays; frameIdx++)
+        array3D[frameIdx] = allocate2DArray(fileMode, parms._num_knots_sorted[frameIdx]);
+    return array3D;
+  }
+
+  // allocate 3D array to store various information;
+  public static double[][][] allocate3DArrayTP(int num2DArrays, GAMParameters parms, int[] secondDim, int[] thirdDim) {
+    double[][][] array3D = new double[num2DArrays][][];
+    int gamColCount = 0;
     for (int frameIdx = 0; frameIdx < num2DArrays; frameIdx++) {
-      int numKnots = parms._num_knots[frameIdx];
-      array3D[frameIdx] = allocate2DArray(parms, fileMode, numKnots);
+      if (parms._gam_columns_sorted[frameIdx].length > 1) {
+        int numKnots = parms._num_knots_sorted[frameIdx];
+        array3D[gamColCount] = MemoryManager.malloc8d(secondDim[gamColCount], thirdDim[gamColCount]);
+        gamColCount++;
+      }
     }
     return array3D;
   }
 
   // allocate 3D array to store various information;
-  public static double[][] allocate2DArray(GAMParameters parms, AllocateType fileMode, int numKnots) {
+  public static double[][] allocate2DArray(AllocateType fileMode, int numKnots) {
     double[][] array2D;
       switch (fileMode) {
         case firstOneLess: array2D = MemoryManager.malloc8d(numKnots-1, numKnots); break;
@@ -197,23 +221,23 @@ public class GamUtils {
     final Vec weights_column = (parms._weights_column == null) ? Vec.makeOne(parms.train().numRows())
             : parms.train().vec(parms._weights_column);
     final Frame predictVec = new Frame();
-    int numPredictors = parms._gam_columns[gam_column_index].length;
+    int numPredictors = parms._gam_columns_sorted[gam_column_index].length;
     for (int colInd = 0; colInd < numPredictors; colInd++)
-      predictVec.add(parms._gam_columns[gam_column_index][colInd],
-              parms._train.get().vec(parms._gam_columns[gam_column_index][colInd]));
+      predictVec.add(parms._gam_columns_sorted[gam_column_index][colInd],
+              parms._train.get().vec(parms._gam_columns_sorted[gam_column_index][colInd]));
     predictVec.add("weights_column", weights_column); // add weight columns for CV support
     return predictVec;
   }
 
   public static String[] generateGamColNames(int gam_col_index, GAMParameters parms) {
-    String[] newColNames = new String[parms._num_knots[gam_col_index]];
+    String[] newColNames = new String[parms._num_knots_sorted[gam_col_index]];
     StringBuffer nameStub = new StringBuffer();
-    int numPredictors = parms._gam_columns[gam_col_index].length;
+    int numPredictors = parms._gam_columns_sorted[gam_col_index].length;
     for (int predInd = 0; predInd < numPredictors; predInd++) {
-      nameStub.append(parms._gam_columns[gam_col_index][predInd]+"_");
+      nameStub.append(parms._gam_columns_sorted[gam_col_index][predInd]+"_");
     }
     String stubName = nameStub.toString();
-    for (int knotIndex = 0; knotIndex < parms._num_knots[gam_col_index]; knotIndex++) {
+    for (int knotIndex = 0; knotIndex < parms._num_knots_sorted[gam_col_index]; knotIndex++) {
       newColNames[knotIndex] = stubName+knotIndex;
     }
     return newColNames;
@@ -221,9 +245,36 @@ public class GamUtils {
   
   public static String[] generateGamColNamesThinPlateKnots(int gamColIndex, GAMParameters parms, 
                                                            List<Integer[]> polyBasisDegree) {
-    int colNameSize = polyBasisDegree.size() + parms._num_knots[gamColIndex];
-    String[] gamColNames = new String[colNameSize];
+    int num_knots = parms._num_knots_sorted[gamColIndex];
+    int polyBasisSize = polyBasisDegree.size();
+    String[] gamColNames = new String[num_knots+polyBasisSize];
+    StringBuffer colNameStub = new StringBuffer(); // column names related to distance measure
+    for (int gColInd = 0; gColInd < parms._gam_columns_sorted[gamColIndex].length; gColInd++) {
+      colNameStub.append(parms._gam_columns_sorted[gamColIndex][gColInd]);
+      colNameStub.append("_");
+    }
+    String nameStub = colNameStub.toString();
+    for (int index = 0; index < num_knots; index++)
+      gamColNames[index] = nameStub+index;
+    
+    for (int index = 0; index < polyBasisSize; index++) {
+      gamColNames[index+num_knots] = genPolyBasisNames(parms._gam_columns_sorted[gamColIndex], polyBasisDegree.get(index));
+    }
     return gamColNames;
+  }
+  
+  public static String genPolyBasisNames(String[] gam_columns, Integer[] oneBasis) {
+    StringBuffer polyBasisName = new StringBuffer();
+    int numGamCols = gam_columns.length;
+    int beforeLastIndex = numGamCols-1;
+    for (int index = 0; index < numGamCols; index++) {
+      polyBasisName.append(gam_columns[index]);
+      polyBasisName.append("_");
+      polyBasisName.append(oneBasis[index]);
+      if (index < beforeLastIndex)
+        polyBasisName.append("_");
+    }
+    return polyBasisName.toString();
   }
 
   public static Frame buildGamFrame(GAMParameters parms, Frame train, Key<Frame>[] gamFrameKeysCenter) {
@@ -231,15 +282,46 @@ public class GamUtils {
     Vec weightsVec = null;
     if (parms._weights_column != null) // move weight vector to be the last vector before response variable
       weightsVec = train.remove(parms._weights_column);
-    for (int colIdx = 0; colIdx < parms._gam_columns.length; colIdx++) {  // append the augmented columns to _train
+    for (int colIdx = 0; colIdx < parms._gam_columns_sorted.length; colIdx++) {  // append the augmented columns to _train
       Frame gamFrame = Scope.track(gamFrameKeysCenter[colIdx].get());
       train.add(gamFrame.names(), gamFrame.removeAll());
-      train.remove(parms._gam_columns[colIdx]);
+      train.remove(parms._gam_columns_sorted[colIdx]);
     }
     if (weightsVec != null)
       train.add(parms._weights_column, weightsVec);
     if (responseVec != null)
       train.add(parms._response_column, responseVec);
     return train;
+  }
+  
+  public static void sortGAMParameters(GAMParameters parms, int csNum, int tpNum) {
+    int gamColNum = parms._gam_columns.length;
+    int csIndex = 0;
+    int tpIndex = csNum;
+    parms._gam_columns_sorted = new String[gamColNum][];
+    parms._num_knots_sorted = new int[gamColNum];
+    parms._scale_sorted = new double[gamColNum];
+    parms._bs_sorted = new int[gamColNum];
+    for (int index = 0; index < gamColNum; index++) {
+      if (parms._gam_columns[index].length == 1) { // cubic spline
+        parms._gam_columns_sorted[csIndex] = parms._gam_columns[index].clone();
+        parms._num_knots_sorted[csIndex] = parms._num_knots[index];
+        parms._scale_sorted[csIndex] = parms._scale[index];
+        parms._bs_sorted[csIndex++] = parms._bs[index];
+      } else {  // thin plate
+        parms._gam_columns_sorted[tpIndex] = parms._gam_columns[index].clone();
+        parms._num_knots_sorted[tpIndex] = parms._num_knots[index];
+        parms._scale_sorted[tpIndex] = parms._scale[index];
+        parms._bs_sorted[tpIndex++] = parms._bs[index];
+      }
+    }
+  }
+
+  // default value of scale is 1.0
+  public static void setDefaultScale(GAMParameters parms) {
+    int numGamCol = parms._gam_columns.length;
+    parms._scale = new double[numGamCol];
+    for (int index = 0; index < numGamCol; index++)
+      parms._scale[index] = 1.0;
   }
 }

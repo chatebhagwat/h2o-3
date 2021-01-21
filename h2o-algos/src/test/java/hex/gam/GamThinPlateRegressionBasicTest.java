@@ -32,7 +32,7 @@ public class GamThinPlateRegressionBasicTest extends TestUtil {
       GAMModel.GAMParameters params = new GAMModel.GAMParameters();
       params._response_column = "C11";
       params._ignored_columns = ignoredCols;
-      params._num_knots = new int[]{0,10,0};
+      params._num_knots = new int[]{0,5,0};
       params._gam_columns = gamCols;
       params._train = train._key;
       GAMModel gam = new GAM(params).trainModel().get();
@@ -70,7 +70,7 @@ public class GamThinPlateRegressionBasicTest extends TestUtil {
       String[][] gamCols = new String[][]{{"C6"},{"C7", "C8"}, {"C9"}};
       GAMModel.GAMParameters params = new GAMModel.GAMParameters();
       params._knot_ids = new String[]{knotsFrame1._key.toString(), knotsFrame2._key.toString(), knotsFrame3._key.toString()};
-      params._bs = new int[]{0,1,1};
+      params._bs = new int[]{0,1,0};
       params._response_column = "C11";
       params._ignored_columns = ignoredCols;
       params._gam_columns = gamCols;
