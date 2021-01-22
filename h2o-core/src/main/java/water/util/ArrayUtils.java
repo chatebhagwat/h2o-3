@@ -517,6 +517,16 @@ public class ArrayUtils {
     return res;
   }
 
+  public static double[][] chopOffColumns(double[][] ary, int newColNum) {
+    if(ary == null) return null;
+    assert ary[0].length > newColNum : "new array should be smaller than original array in second dimension.";
+    double[][] res = new double[ary.length][newColNum];
+    for(int i = 0; i < res.length; i++) {
+      System.arraycopy(ary[i], 0, res[i], 0, newColNum);
+    }
+    return res;
+  }
+
   /***
    * This function will perform transpose of triangular matrices only.  If the original matrix is lower triangular,
    * the return matrix will be upper triangular and vice versa.

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static hex.gam.GAMModel.GAMParameters;
 import static water.util.ArrayUtils.maxValue;
 
 // This class contains functions that perform different functions for generating the thin plate regression splines
@@ -234,5 +235,22 @@ public class ThinPlatePolynomialBasisUtils {
         return true;
     }
     return false;
+  }
+  
+  public static String genThinPlateNameStart(GAMParameters parms, int gamColIndex) {
+    StringBuffer colNameStub = new StringBuffer();
+    for (int gColInd = 0; gColInd < parms._gam_columns_sorted[gamColIndex].length; gColInd++) {
+      colNameStub.append(parms._gam_columns_sorted[gamColIndex][gColInd]);
+      colNameStub.append("_");
+    }
+    colNameStub.append(parms._bs_sorted[gamColIndex]);
+    colNameStub.append("_");
+    return colNameStub.toString();
+  }
+  
+  public static String[] extractColNames(String[] src, int srcStart, int destStart, int length) {
+    String[] distanceColNames = new String[length];  // exclude the polynomial basis names
+    System.arraycopy(src, srcStart, distanceColNames, destStart, length);
+    return distanceColNames;
   }
 }

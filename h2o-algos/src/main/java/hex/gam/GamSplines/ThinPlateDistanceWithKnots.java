@@ -9,6 +9,7 @@ import water.fvec.Chunk;
 import water.fvec.Frame;
 import water.fvec.NewChunk;
 import water.fvec.Vec;
+import water.util.ArrayUtils;
 
 import static hex.gam.GAMModel.GAMParameters;
 import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.*;
@@ -44,12 +45,14 @@ public class ThinPlateDistanceWithKnots extends MRTask<ThinPlateDistanceWithKnot
   public void map(Chunk[] chk, NewChunk[] newGamCols) {
     int nrows = chk[0].len();
     double[] rowValues = MemoryManager.malloc8d(_knotNum);
+    double[] chkRowValues = MemoryManager.malloc8d(_d);
     for (int rowIndex = 0; rowIndex < nrows; rowIndex++) {
       if (chk[_weightID].atd(rowIndex) != 0) {
         if (checkRowNA(chk, rowIndex)) {
           fillRowOneValue(newGamCols, _knotNum, Double.NaN);
         } else {  // calculate distance measure as in 3.1
-          calculateDistance(rowValues, chk, rowIndex);
+          fillRowData(chkRowValues, chk, rowIndex);
+          calculateDistance(rowValues, chkRowValues, rowIndex);
           fillRowArray(newGamCols, _knotNum, rowValues);
         }
       } else {  // insert 0 to newChunk for weigth == 0
@@ -58,11 +61,16 @@ public class ThinPlateDistanceWithKnots extends MRTask<ThinPlateDistanceWithKnot
     }
   }
   
-  void calculateDistance(double[] rowValues, Chunk[] chk, int rowIndex) { // see 3.1
+  void fillRowData(double[] rowHolder, Chunk[] chk, int rowIndex) {
+    for (int colIndex = 0; colIndex < _d; colIndex++)
+      rowHolder[colIndex] = chk[colIndex].atd(rowIndex);
+  }
+  
+  void calculateDistance(double[] rowValues, double[] chk, int rowIndex) { // see 3.1
     for (int knotInd = 0; knotInd < _knotNum; knotInd++) { // calculate distance between data and knots
       double sumSq = 0;
       for (int predInd = 0; predInd < _d; predInd++) {
-        double temp = chk[predInd].atd(rowIndex) - _knots[predInd][knotInd];
+        double temp = chk[rowIndex] - _knots[predInd][knotInd];
         sumSq += temp*temp;
       }
       double distance = Math.sqrt(sumSq);
@@ -73,9 +81,8 @@ public class ThinPlateDistanceWithKnots extends MRTask<ThinPlateDistanceWithKnot
   }
   
   // This function perform the operation described in 3.3 regarding the part of data Xnmd.
-  public static Frame applyConstraint(Frame fr, String colNameStart, GAMParameters parms, double[][] zCST, int newColNum) {
+  public static Frame applyTransform(Frame fr, String colNameStart, GAMParameters parms, double[][] zCST, int newColNum) {
     int numCols = fr.numCols(); // == numKnots
-    int k = zCST[0].length; // number of columns after zCS is applied to frame
     DataInfo frInfo = new DataInfo(fr, null, 0, false,  DataInfo.TransformType.NONE, 
             DataInfo.TransformType.NONE, MissingValuesHandling.Skip == parms._missing_values_handling, 
             (parms._missing_values_handling == MissingValuesHandling.MeanImputation) || 
@@ -91,5 +98,16 @@ public class ThinPlateDistanceWithKnots extends MRTask<ThinPlateDistanceWithKnot
       temp.remove();
     }
     return fr;
+  }
+  
+  public double[][] generatePenalty() {
+    double[][] penaltyMat = new double[_knotNum][_knotNum];
+    double[][] knotsTranspose = ArrayUtils.transpose(_knots);
+    double[] tempVal = MemoryManager.malloc8d(_knotNum);
+    for (int index = 0; index < _knotNum; index++) {
+      calculateDistance(tempVal, knotsTranspose[index], index);
+      System.arraycopy(tempVal, 0, penaltyMat[index], 0, _knotNum);
+    }
+    return penaltyMat;
   }
 }
