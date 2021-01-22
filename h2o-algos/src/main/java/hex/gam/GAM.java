@@ -1,11 +1,14 @@
 package hex.gam;
 
+import Jama.Matrix;
+import Jama.QRDecomposition;
 import hex.DataInfo;
 import hex.ModelBuilder;
 import hex.ModelCategory;
 import hex.ModelMetrics;
 import hex.gam.GAMModel.GAMParameters;
 import hex.gam.GamSplines.ThinPlateDistanceWithKnots;
+import hex.gam.GamSplines.ThinPlatePolynomialWithKnots;
 import hex.gam.MatrixFrameUtils.GamUtils;
 import hex.gam.MatrixFrameUtils.GenerateGamMatrixOneColumn;
 import hex.glm.GLM;
@@ -26,8 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static hex.gam.GAMModel.cleanUpInputFrame;
-import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.calculatem;
-import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.findPolybasis;
+import static hex.gam.GamSplines.ThinPlatePolynomialBasisUtils.*;
 import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMCoeffs;
 import static hex.gam.MatrixFrameUtils.GAMModelUtils.copyGLMtoGAMModel;
 import static hex.gam.MatrixFrameUtils.GamUtils.*;
@@ -423,8 +425,9 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         int[] kMinusM = subtract(_parms._num_knots_tp, _parms._M);
         _zTransposeCS = GamUtils.allocate3DArrayTP(_thinPlateSmoothersWithKnotsNum, _parms, kMinusM, _parms._num_knots_tp);
         _penalty_mat_CS = GamUtils.allocate3DArrayTP(_thinPlateSmoothersWithKnotsNum, _parms, kMinusM, kMinusM);
+        if (_parms._savePenaltyMat)
+          _starT = GamUtils.allocate3DArrayTP(_thinPlateSmoothersWithKnotsNum, _parms, _parms._num_knots_tp, _parms._M);
       }
-
       addGAM2Train();  // add GAM columns to training frame
       return buildGamFrame(_parms, _train, _gamFrameKeysCenter); // add gam cols to _train
     }
@@ -439,18 +442,20 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
       final int _gamColIndex;
       final int _thinPlateGamColIndex;
       final int _numPred; // number of predictors
+      final int _M;
       
       public ThinPlateRegressionSmootherWithKnots(Frame predV, GAMParameters parms, int gamColIndex, double[][] knots,
                                                   int thinPlateInd) {
         _predictVec  = predV;
         _knots = knots;
-        _numKnots = knots[gamColIndex].length;
+        _numKnots = knots[0].length;
         _parms = parms;
         _splineType = _parms._bs_sorted[gamColIndex];
         _gamColIndex = gamColIndex;
         _thinPlateGamColIndex = thinPlateInd;
         _savePenaltyMat = _parms._savePenaltyMat;
         _numPred = parms._gam_columns_sorted[gamColIndex].length;
+        _M = _parms._M[_thinPlateGamColIndex];
       }
 
       @Override
@@ -461,12 +466,38 @@ public class GAM extends ModelBuilder<GAMModel, GAMModel.GAMParameters, GAMModel
         // generate polynomial basis lists as described in 3.2 of GamThinPlatRegressionH2O doc
         List<Integer[]> polyBasisDegree = findPolybasis(_numPred, calculatem(_numPred));
         // generate gam column names before any processing
-        String[] gamColNames = generateGamColNamesThinPlateKnots(_gamColIndex, _parms, polyBasisDegree);
-        // generate T* for all knots as double[][]
+        StringBuffer colNameStub = new StringBuffer();
+        for (int gColInd = 0; gColInd < _parms._gam_columns_sorted[_gamColIndex].length; gColInd++) {
+          colNameStub.append(_parms._gam_columns_sorted[_gamColIndex][gColInd]);
+          colNameStub.append("_");
+        }
+        String[] gamColNames = generateGamColNamesThinPlateKnots(_gamColIndex, _parms, polyBasisDegree, colNameStub.toString());
+        System.arraycopy(gamColNames, 0, _gamColNames[_gamColIndex], 0, gamColNames.length);
+        String[] distanceColNames = new String[_numKnots];  // exclude the polynomial basis names
+        System.arraycopy(gamColNames, 0, distanceColNames, 0, _numKnots);
+        String[] polyNames = new String[_parms._M[_thinPlateGamColIndex]];
+        System.arraycopy(gamColNames, _numKnots, polyNames, 0, _parms._M[_thinPlateGamColIndex]);
+        Frame thinPlateFrame = distanceMeasure.outputFrame(Key.make(), distanceColNames, null);
+        // generate T* for all knots as double[][] as in 3.2.3
+        double[][] starT = generateStarT(_knots, polyBasisDegree);
+        if (_savePenaltyMat)
+          GamUtils.copy2DArray(starT, _starT[_gamColIndex]);
         // generate Zcs as in 3.3
+        Matrix starTMat = new Matrix(starT);
+        QRDecomposition starTMat_qr = new QRDecomposition(starTMat);
+        double[][] qMat = starTMat_qr.getQ().getArray();
+        double[][] zCST = ArrayUtils.transpose(extractLastKMinuMCols(qMat, _parms._M[_thinPlateGamColIndex], 
+                _parms._M[_thinPlateGamColIndex]));
+        GamUtils.copy2DArray(zCST, _zTransposeCS[_thinPlateGamColIndex]);
         // generate Xcs as in 3.3
+        thinPlateFrame = ThinPlateDistanceWithKnots.applyConstraint(thinPlateFrame, colNameStub.toString(), _parms, 
+                zCST, _numKnots-_parms._M[_thinPlateGamColIndex]);
         // generate polynomial basis T as in 3.2
+        ThinPlatePolynomialWithKnots thinPlatePoly = new ThinPlatePolynomialWithKnots(_numPred, 
+                polyBasisDegree).doAll(_parms._M[_thinPlateGamColIndex], Vec.T_NUM, _predictVec);
+        Frame thinPlatePolyBasis = thinPlatePoly.outputFrame(Key.make(), polyNames, null);
         // concatenate Xcs and T
+        thinPlateFrame.add(thinPlatePolyBasis);
         // generate Z for centering as in 3.4
         // generate Xz as in 3.4
       }

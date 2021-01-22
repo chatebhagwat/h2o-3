@@ -244,16 +244,10 @@ public class GamUtils {
   }
   
   public static String[] generateGamColNamesThinPlateKnots(int gamColIndex, GAMParameters parms, 
-                                                           List<Integer[]> polyBasisDegree) {
+                                                           List<Integer[]> polyBasisDegree, String nameStub) {
     int num_knots = parms._num_knots_sorted[gamColIndex];
     int polyBasisSize = polyBasisDegree.size();
     String[] gamColNames = new String[num_knots+polyBasisSize];
-    StringBuffer colNameStub = new StringBuffer(); // column names related to distance measure
-    for (int gColInd = 0; gColInd < parms._gam_columns_sorted[gamColIndex].length; gColInd++) {
-      colNameStub.append(parms._gam_columns_sorted[gamColIndex][gColInd]);
-      colNameStub.append("_");
-    }
-    String nameStub = colNameStub.toString();
     for (int index = 0; index < num_knots; index++)
       gamColNames[index] = nameStub+index;
     

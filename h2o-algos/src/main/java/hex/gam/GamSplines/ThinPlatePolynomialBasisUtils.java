@@ -1,8 +1,12 @@
 package hex.gam.GamSplines;
 
+import water.fvec.Chunk;
+import water.fvec.NewChunk;
 import water.util.MathUtils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static water.util.ArrayUtils.maxValue;
 
@@ -184,5 +188,51 @@ public class ThinPlatePolynomialBasisUtils {
     int combSize = currCombo.length;
     for (int tempIndex = index+1; tempIndex < combSize; tempIndex++) 
       currCombo[tempIndex] = 0;
+  }
+  
+  public static double[][] generateStarT(double[][] knots, List<Integer[]> polyBasisDegree) {
+    int numKnots = knots[0].length;
+    int M = polyBasisDegree.size();
+    int d = knots.length;
+    double[][] starT = new double[numKnots][M];
+    for (int rowInd = 0; rowInd < numKnots; rowInd++) {
+      for (int polyBasisInd = 0; polyBasisInd < M; polyBasisInd++) {
+        Integer[] oneBasis = polyBasisDegree.get(polyBasisInd);
+        double polyBasisVal = 1.0;
+        for (int predInd = 0; predInd < d; predInd++) {
+          polyBasisVal *= Math.pow(knots[predInd][rowInd], oneBasis[predInd]);
+        }
+        starT[rowInd][polyBasisInd] = polyBasisVal;
+      }
+    }
+    return starT;
+  }
+
+  public static double[][]extractLastKMinuMCols(double[][] qMat, int rowStart, int rowEnd) {
+    int nCol = rowEnd - rowStart;
+    int nRow = rowEnd;
+    double[][] zCS = new double[nRow][nCol];
+    for (int index = 0; index < rowEnd; index++) {
+      System.arraycopy(qMat[index], rowStart, zCS[index], 0, nCol);
+    }
+    return zCS;
+  }
+  public static void fillRowOneValue(NewChunk[] newChk, int colWidth, double fillValue) {
+    for (int colInd = 0; colInd < colWidth; colInd++)
+      newChk[colInd].addNum(fillValue);
+  }
+
+  public static void fillRowArray(NewChunk[] newChk, int colWidth, double[] fillValue) {
+    for (int colInd = 0; colInd < colWidth; colInd++)
+      newChk[colInd].addNum(fillValue[colInd]);
+  }
+
+  public static boolean checkRowNA(Chunk[] chk, int rowIndex) {
+    int numCol = chk.length;
+    for (int colIndex = 0; colIndex < numCol; colIndex++) {
+      if (Double.isNaN(chk[colIndex].atd(rowIndex)))
+        return true;
+    }
+    return false;
   }
 }
